@@ -1,0 +1,71 @@
+name: Build OBS CamMorph Plugin (Windows x64)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout plugin sources
+        uses: actions/checkout@v4
+        with:
+          path: plugin-src
+
+      - name: Clone official OBS Plugin Template
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-plugintemplate
+          path: template
+
+      - name: Inject CamMorph code into template
+        shell: pwsh
+        run: |
+          Remove-Item -Path "template/src/*" -Recurse -Force
+          Copy-Item -Path "plugin-src/src/*" -Destination "template/src/" -Recurse -Force
+
+          if (Test-Path "template/data") {
+            Remove-Item -Path "template/data/*" -Recurse -Force
+          } else {
+            New-Item -ItemType Directory -Path "template/data" -Force
+          }
+          Copy-Item -Path "plugin-src/data/*" -Destination "template/data/" -Recurse -Force
+
+          $specPath = "template/buildspec.json"
+          $spec = Get-Content $specPath -Raw | ConvertFrom-Json
+          $spec.name = "obs-cam-morph"
+          $spec.displayName = "OBS CamMorph"
+          $spec.version = "0.1.0"
+          $spec.author = "Ben"
+          $spec | ConvertTo-Json -Depth 10 | Set-Content $specPath -Encoding UTF8
+
+      - name: Configure CMake (Windows x64)
+        working-directory: template
+        shell: pwsh
+        run: cmake --preset windows-x64
+
+      - name: Build Plugin (Release)
+        working-directory: template
+        shell: pwsh
+        run: cmake --build --preset windows-x64 --config Release
+
+      - name: Package Plugin Files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "dist/obs-plugins/64bit" -Force
+          New-Item -ItemType Directory -Path "dist/data/obs-plugins/obs-cam-morph" -Force
+
+          $dll = Get-ChildItem -Path "template/build_x64" -Filter "obs-cam-morph.dll" -Recurse | Select-Object -First 1
+          if (-not $dll) {
+            throw "Could not find compiled obs-cam-morph.dll!"
+          }
+          Copy-Item $dll.FullName -Destination "dist/obs-plugins/64bit/"
+          Copy-Item -Path "plugin-src/data/*" -Destination "dist/data/obs-plugins/obs-cam-morph/" -Recurse -Force
+
+      - name: Upload Ready-to-Use OBS Plugin Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-cam-morph-windows-x64
+          path: dist/
