@@ -1,8 +1,6 @@
 name: Build UBIQUE CAM Plugin (Windows x64)
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
