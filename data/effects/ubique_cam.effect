@@ -2,23 +2,38 @@ uniform float4x4 ViewProj;
 uniform texture2D image;
 uniform texture2D avatar_tex;
 uniform texture2D bg_tex;
+uniform texture2D spec_tex;
 
 uniform float2 out_size;
 uniform float2 src_size;
 uniform float2 pad_offset;
+uniform float time;
 
 uniform float morph_t;
+uniform int trans_type;      // 0=Crossfade, 1=Blur, 2=Glitch, 3=CRT
 
 uniform float4 crop;
 uniform float zoom;
 uniform float2 pan;
+uniform int flip_h;
+uniform float vignette;
+uniform float contrast;
+uniform float warmth;
 
 uniform float corner_radius;
 uniform float border_width;
+uniform int border_style;    // 0=Solid, 1=Gradient, 2=AnimGradient
+uniform float border_grad_speed;
 uniform float4 border_color;
+uniform float4 border_color2;
+
 uniform float glow_size;
 uniform float glow_intensity;
 uniform float4 glow_color;
+uniform float audio_level;
+uniform float peak_level;
+uniform float4 peak_color;
+
 uniform float shadow_blur;
 uniform float2 shadow_offset;
 uniform float4 shadow_color;
@@ -30,12 +45,26 @@ uniform float2 avatar_offset;
 uniform float anim_breath;
 uniform float anim_bounce;
 uniform float anim_sway;
+uniform float2 shake_offset;
+uniform float idle_dim_factor;
 
 uniform int bg_mode;
 uniform float4 bg_color;
 uniform float bg_blur;
 
+uniform int spec_layer;      // 0=Off, 1=BehindAvatar, 2=Overlay, 3=AroundBorder
+uniform int spec_design;     // 0=Bars, 1=Wave, 2=Mirror, 3=LED
+uniform float4 spec_color;
+uniform float spec_height;
+uniform float spec_opacity;
+
 sampler_state textureSampler {
+    Filter    = Linear;
+    AddressU  = Clamp;
+    AddressV  = Clamp;
+};
+
+sampler_state specSampler {
     Filter    = Linear;
     AddressU  = Clamp;
     AddressV  = Clamp;
@@ -58,50 +87,129 @@ float sdRoundedBox(float2 p, float2 b, float r) {
     return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
 }
 
-float4 sampleWebcam(float2 local_uv) {
-    float inv_zoom = 1.0 / max(zoom, 1.0);
-    float2 zoomed_uv = local_uv * inv_zoom + 0.5;
-    float2 max_pan = (1.0 - inv_zoom) * 0.5;
-    zoomed_uv += pan * max_pan;
-    float2 src_uv = lerp(crop.xy, 1.0 - crop.zw, clamp(zoomed_uv, 0.0, 1.0));
-    return image.Sample(textureSampler, src_uv);
+float hash11(float p) {
+    return frac(sin(p * 127.1) * 43758.5453123);
 }
 
-float4 sampleBlurredWebcam(float2 local_uv) {
+float2 calcWebcamUV(float2 local_uv) {
+    float2 uv = local_uv;
+    if (flip_h == 1) uv.x = -uv.x;
     float inv_zoom = 1.0 / max(zoom, 1.0);
-    float2 zoomed_uv = local_uv * inv_zoom + 0.5;
+    float2 zoomed_uv = uv * inv_zoom + 0.5;
     float2 max_pan = (1.0 - inv_zoom) * 0.5;
     zoomed_uv += pan * max_pan;
-    float2 base_uv = lerp(crop.xy, 1.0 - crop.zw, clamp(zoomed_uv, 0.0, 1.0));
+    return lerp(crop.xy, 1.0 - crop.zw, clamp(zoomed_uv, 0.0, 1.0));
+}
 
-    float r = max(bg_blur, 0.001);
-    float4 col = image.Sample(textureSampler, base_uv) * 0.20;
-    col += image.Sample(textureSampler, clamp(base_uv + float2( r,  0.0), 0.0, 1.0)) * 0.12;
-    col += image.Sample(textureSampler, clamp(base_uv + float2(-r,  0.0), 0.0, 1.0)) * 0.12;
-    col += image.Sample(textureSampler, clamp(base_uv + float2(0.0,  r ), 0.0, 1.0)) * 0.12;
-    col += image.Sample(textureSampler, clamp(base_uv + float2(0.0, -r ), 0.0, 1.0)) * 0.12;
-    col += image.Sample(textureSampler, clamp(base_uv + float2( r,  r ) * 0.707, 0.0, 1.0)) * 0.08;
-    col += image.Sample(textureSampler, clamp(base_uv + float2(-r,  r ) * 0.707, 0.0, 1.0)) * 0.08;
-    col += image.Sample(textureSampler, clamp(base_uv + float2( r, -r ) * 0.707, 0.0, 1.0)) * 0.08;
-    col += image.Sample(textureSampler, clamp(base_uv + float2(-r, -r ) * 0.707, 0.0, 1.0)) * 0.08;
+float4 applyOptics(float4 col, float2 local_uv) {
+    // Contrast
+    col.rgb = (col.rgb - 0.5) * contrast + 0.5;
+    // Warmth
+    col.r += warmth * 0.12;
+    col.b -= warmth * 0.12;
+    // Vignette
+    if (vignette > 0.001) {
+        float d = length(local_uv * 1.414);
+        float v = smoothstep(0.45, 1.25, d);
+        col.rgb *= (1.0 - v * vignette * 0.85);
+    }
+    col.rgb = saturate(col.rgb);
     return col;
 }
 
+float4 sampleWebcam(float2 local_uv, float extra_blur) {
+    float2 base_uv = calcWebcamUV(local_uv);
+    float4 col;
+    if (extra_blur > 0.0005) {
+        float r = extra_blur;
+        col = image.Sample(textureSampler, base_uv) * 0.20;
+        col += image.Sample(textureSampler, clamp(base_uv + float2( r,  0.0), 0.0, 1.0)) * 0.12;
+        col += image.Sample(textureSampler, clamp(base_uv + float2(-r,  0.0), 0.0, 1.0)) * 0.12;
+        col += image.Sample(textureSampler, clamp(base_uv + float2(0.0,  r ), 0.0, 1.0)) * 0.12;
+        col += image.Sample(textureSampler, clamp(base_uv + float2(0.0, -r ), 0.0, 1.0)) * 0.12;
+        col += image.Sample(textureSampler, clamp(base_uv + float2( r,  r ) * 0.707, 0.0, 1.0)) * 0.08;
+        col += image.Sample(textureSampler, clamp(base_uv + float2(-r,  r ) * 0.707, 0.0, 1.0)) * 0.08;
+        col += image.Sample(textureSampler, clamp(base_uv + float2( r, -r ) * 0.707, 0.0, 1.0)) * 0.08;
+        col += image.Sample(textureSampler, clamp(base_uv + float2(-r, -r ) * 0.707, 0.0, 1.0)) * 0.08;
+    } else {
+        col = image.Sample(textureSampler, base_uv);
+    }
+    return applyOptics(col, local_uv);
+}
+
+// Compute Audio Spectrum overlay inside box (uv_box in [0..1])
+float4 evalSpectrumInside(float2 uv_box) {
+    if (spec_opacity <= 0.001 || spec_height <= 0.001) return float4(0.0, 0.0, 0.0, 0.0);
+
+    float a = 0.0;
+    float h_scale = spec_height;
+
+    if (spec_design == 0) {
+        // Classic 32 Bars from bottom
+        float idx = floor(uv_box.x * 32.0);
+        float cell_x = frac(uv_box.x * 32.0);
+        float bar_mask = step(0.18, cell_x) * step(cell_x, 0.82);
+        float amp = spec_tex.Sample(specSampler, float2((idx + 0.5) / 32.0, 0.5)).r * h_scale;
+        float y_from_bottom = 1.0 - uv_box.y;
+        a = bar_mask * smoothstep(amp + 0.01, amp - 0.005, y_from_bottom) * step(0.005, amp);
+    } else if (spec_design == 1) {
+        // Smooth Neon Wave
+        float amp = spec_tex.Sample(specSampler, float2(uv_box.x, 0.5)).r * h_scale;
+        float y_from_bottom = 1.0 - uv_box.y;
+        float dist_line = abs(y_from_bottom - (0.04 + amp));
+        float line_glow = exp(-dist_line * 65.0);
+        float fill = smoothstep(0.04 + amp + 0.01, 0.04 + amp - 0.01, y_from_bottom) * 0.28;
+        a = saturate(line_glow + fill);
+    } else if (spec_design == 2) {
+        // Mirrored Center Wave
+        float mirror_x = abs(uv_box.x - 0.5) * 2.0;
+        float amp = spec_tex.Sample(specSampler, float2(mirror_x, 0.5)).r * h_scale * 0.55;
+        float dy = abs(uv_box.y - 0.5);
+        float idx = floor(mirror_x * 24.0);
+        float cell = frac(mirror_x * 24.0);
+        float bar_mask = step(0.15, cell) * step(cell, 0.85);
+        a = bar_mask * smoothstep(amp + 0.012, amp - 0.004, dy) * step(0.005, amp);
+    } else {
+        // Lithic Segmented LED Bars
+        float idx = floor(uv_box.x * 28.0);
+        float cell_x = frac(uv_box.x * 28.0);
+        float cell_y = frac((1.0 - uv_box.y) * 22.0);
+        float led_mask = step(0.18, cell_x) * step(cell_x, 0.82) * step(0.25, cell_y) * step(cell_y, 0.85);
+        float amp = spec_tex.Sample(specSampler, float2((idx + 0.5) / 28.0, 0.5)).r * h_scale;
+        float y_from_bottom = 1.0 - uv_box.y;
+        a = led_mask * step(y_from_bottom, amp) * step(0.01, amp);
+    }
+
+    return float4(spec_color.rgb, a * spec_color.a * spec_opacity);
+}
+
 float4 samplePNGTuber(float2 local_uv, float2 box_size) {
+    // 1. Background
     float4 bg = float4(0.0, 0.0, 0.0, 0.0);
     if (bg_mode == 0) {
         bg = bg_color;
     } else if (bg_mode == 1) {
         bg = bg_tex.Sample(textureSampler, local_uv + 0.5);
     } else if (bg_mode == 2) {
-        bg = sampleBlurredWebcam(local_uv);
+        bg = sampleWebcam(local_uv, max(bg_blur, 0.002));
     } else {
         bg = float4(0.0, 0.0, 0.0, 0.0);
     }
 
+    // 1.5 Spectrum Behind Avatar
+    if (spec_layer == 1) {
+        float4 sp = evalSpectrumInside(local_uv + 0.5);
+        float out_a = sp.a + bg.a * (1.0 - sp.a);
+        if (out_a > 0.0001) {
+            bg.rgb = (sp.rgb * sp.a + bg.rgb * bg.a * (1.0 - sp.a)) / out_a;
+        }
+        bg.a = out_a;
+    }
+
+    // 2. Avatar with procedural animations & scream shake
     float4 av = float4(0.0, 0.0, 0.0, 0.0);
     if (has_avatar == 1 && avatar_tex_size.x > 1.0 && avatar_tex_size.y > 1.0) {
-        float2 p = local_uv - avatar_offset;
+        float2 p = local_uv - avatar_offset - shake_offset;
         p.y += anim_bounce;
 
         float2 pivot = float2(0.0, 0.5);
@@ -131,6 +239,11 @@ float4 samplePNGTuber(float2 local_uv, float2 box_size) {
 
         if (av_uv.x >= 0.0 && av_uv.x <= 1.0 && av_uv.y >= 0.0 && av_uv.y <= 1.0) {
             av = avatar_tex.Sample(textureSampler, av_uv);
+            // Idle dim when silent
+            if (idle_dim_factor > 0.001) {
+                float lum = dot(av.rgb, float3(0.299, 0.587, 0.114));
+                av.rgb = lerp(av.rgb, float3(lum, lum, lum) * 0.65, idle_dim_factor);
+            }
         }
     }
 
@@ -157,6 +270,12 @@ float4 PSUbiqueCam(VertData v_in) : TARGET {
     float dist = sdRoundedBox(p, half_box, r);
     float aa = 1.0;
 
+    // Effective glow modulated by audio reactivity
+    float eff_glow_size = glow_size * (1.0 + audio_level * 0.6);
+    float eff_glow_int = glow_intensity * (1.0 + audio_level * 0.9);
+    float4 eff_glow_col = lerp(glow_color, peak_color, peak_level);
+
+    // 1. Drop Shadow
     float4 result = float4(0.0, 0.0, 0.0, 0.0);
     if (shadow_color.a > 0.001) {
         float2 p_shadow = p - shadow_offset;
@@ -167,29 +286,93 @@ float4 PSUbiqueCam(VertData v_in) : TARGET {
         result = float4(shadow_color.rgb * shadow_alpha, shadow_alpha);
     }
 
-    if (glow_size > 0.5 && glow_intensity > 0.001 && glow_color.a > 0.001) {
+    // 2. Outer Glow (Audio-Reactive)
+    if (eff_glow_size > 0.5 && eff_glow_int > 0.001 && eff_glow_col.a > 0.001) {
         float glow_dist = max(dist - border_width, 0.0);
-        float glow_factor = exp(-glow_dist / max(glow_size * 0.35, 1.0));
-        glow_factor *= smoothstep(glow_size, 0.0, glow_dist);
-        float g_alpha = clamp(glow_factor * glow_intensity * glow_color.a, 0.0, 1.0);
+        float glow_factor = exp(-glow_dist / max(eff_glow_size * 0.35, 1.0));
+        glow_factor *= smoothstep(eff_glow_size, 0.0, glow_dist);
+        float g_alpha = clamp(glow_factor * eff_glow_int * eff_glow_col.a, 0.0, 1.0);
 
-        float3 g_rgb = glow_color.rgb * g_alpha;
+        float3 g_rgb = eff_glow_col.rgb * g_alpha;
         result = float4(g_rgb + result.rgb * (1.0 - g_alpha), g_alpha + result.a * (1.0 - g_alpha));
     }
 
+    // 2.5 Spectrum Around Border (Layer == 3)
+    if (spec_layer == 3 && dist > 0.0 && spec_opacity > 0.001 && spec_height > 0.001) {
+        float angle = atan2(p.y, p.x); // -pi..pi
+        float u = frac((angle / 6.2831853) + 0.5);
+        float max_reach = spec_height * 110.0;
+        float amp = spec_tex.Sample(specSampler, float2(u, 0.5)).r * max_reach;
+        float d_edge = dist - border_width * 0.5;
+        float s_alpha = 0.0;
+        if (spec_design == 0 || spec_design == 3) {
+            float seg = frac(u * 48.0);
+            float bar_m = step(0.2, seg) * step(seg, 0.8);
+            s_alpha = bar_m * smoothstep(amp + 1.5, amp - 1.0, d_edge) * step(1.5, amp);
+        } else {
+            s_alpha = smoothstep(amp + 2.0, amp - 1.0, d_edge) * step(1.0, amp);
+        }
+        float sp_a = s_alpha * spec_color.a * spec_opacity;
+        float3 sp_rgb = spec_color.rgb * sp_a;
+        result = float4(sp_rgb + result.rgb * (1.0 - sp_a), sp_a + result.a * (1.0 - sp_a));
+    }
+
+    // 3. Main Content (with Transition Effects)
     float mask = 1.0 - smoothstep(-aa, aa, dist);
     if (mask > 0.001) {
         float2 local_uv = p / box_size;
         float4 content_col;
 
         if (morph_t <= 0.001) {
-            content_col = sampleWebcam(local_uv);
+            content_col = sampleWebcam(local_uv, 0.0);
         } else if (morph_t >= 0.999) {
             content_col = samplePNGTuber(local_uv, box_size);
         } else {
-            float4 cam_c = sampleWebcam(local_uv);
-            float4 png_c = samplePNGTuber(local_uv, box_size);
-            content_col = lerp(cam_c, png_c, morph_t);
+            float mid = sin(morph_t * 3.14159265); // 0 -> 1 -> 0
+            if (trans_type == 1) {
+                // Blur Morph
+                float b = mid * 0.035;
+                float4 cam_c = sampleWebcam(local_uv, b);
+                float4 png_c = samplePNGTuber(local_uv, box_size);
+                content_col = lerp(cam_c, png_c, smoothstep(0.2, 0.8, morph_t));
+            } else if (trans_type == 2) {
+                // Glitch / RGB Split
+                float slice = floor((local_uv.y + 0.5) * 18.0);
+                float jitter = (hash11(slice + floor(time * 30.0)) - 0.5) * 0.14 * mid;
+                float2 guv = float2(local_uv.x + jitter, local_uv.y);
+                float4 base_c = (morph_t < 0.5) ? sampleWebcam(guv, 0.0) : samplePNGTuber(guv, box_size);
+                float4 r_c = (morph_t < 0.5) ? sampleWebcam(guv + float2(0.025 * mid, 0.0), 0.0)
+                                             : samplePNGTuber(guv + float2(0.025 * mid, 0.0), box_size);
+                float4 b_c = (morph_t < 0.5) ? sampleWebcam(guv - float2(0.025 * mid, 0.0), 0.0)
+                                             : samplePNGTuber(guv - float2(0.025 * mid, 0.0), box_size);
+                content_col = float4(r_c.r, base_c.g, b_c.b, base_c.a);
+            } else if (trans_type == 3) {
+                // CRT Collapse
+                float scale_y = max(abs(1.0 - morph_t * 2.0), 0.015);
+                float2 cuv = float2(local_uv.x, local_uv.y / scale_y);
+                if (abs(cuv.y) > 0.5) {
+                    float flash = exp(-abs(local_uv.y) * 90.0) * mid;
+                    content_col = float4(float3(1.0, 0.85, 0.7) * flash, flash);
+                } else {
+                    content_col = (morph_t < 0.5) ? sampleWebcam(cuv, 0.0) : samplePNGTuber(cuv, box_size);
+                    content_col.rgb += mid * 0.35;
+                }
+            } else {
+                // Crossfade
+                float4 cam_c = sampleWebcam(local_uv, 0.0);
+                float4 png_c = samplePNGTuber(local_uv, box_size);
+                content_col = lerp(cam_c, png_c, morph_t);
+            }
+        }
+
+        // Spectrum Overlay (Layer == 2)
+        if (spec_layer == 2) {
+            float4 sp = evalSpectrumInside(local_uv + 0.5);
+            float oa = sp.a + content_col.a * (1.0 - sp.a);
+            if (oa > 0.0001) {
+                content_col.rgb = (sp.rgb * sp.a + content_col.rgb * content_col.a * (1.0 - sp.a)) / oa;
+            }
+            content_col.a = oa;
         }
 
         float c_a = content_col.a * mask;
@@ -197,14 +380,26 @@ float4 PSUbiqueCam(VertData v_in) : TARGET {
         result = float4(c_rgb + result.rgb * (1.0 - c_a), c_a + result.a * (1.0 - c_a));
     }
 
-    if (border_width > 0.1 && border_color.a > 0.001) {
-        float half_bw = border_width * 0.5;
-        float border_dist = abs(dist) - half_bw;
-        float border_mask = 1.0 - smoothstep(-aa, aa, border_dist);
-        float b_alpha = border_mask * border_color.a;
+    // 4. Border (Solid / Gradient / Animated Gradient + Peak Color)
+    if (border_width > 0.1) {
+        float4 b_col = border_color;
+        if (border_style == 1 || border_style == 2) {
+            float ang = atan2(p.y, p.x);
+            float phase = (border_style == 2) ? (time * border_grad_speed) : 0.0;
+            float gt = 0.5 + 0.5 * sin(ang + phase);
+            b_col = lerp(border_color, border_color2, gt);
+        }
+        b_col = lerp(b_col, peak_color, peak_level);
 
-        float3 b_rgb = border_color.rgb * b_alpha;
-        result = float4(b_rgb + result.rgb * (1.0 - b_alpha), b_alpha + result.a * (1.0 - b_alpha));
+        if (b_col.a > 0.001) {
+            float half_bw = border_width * 0.5;
+            float border_dist = abs(dist) - half_bw;
+            float border_mask = 1.0 - smoothstep(-aa, aa, border_dist);
+            float b_alpha = border_mask * b_col.a;
+
+            float3 b_rgb = b_col.rgb * b_alpha;
+            result = float4(b_rgb + result.rgb * (1.0 - b_alpha), b_alpha + result.a * (1.0 - b_alpha));
+        }
     }
 
     if (result.a > 0.0001) {
