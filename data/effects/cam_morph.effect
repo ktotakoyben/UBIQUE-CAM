@@ -93,7 +93,6 @@ float4 sampleBlurredWebcam(float2 local_uv) {
 }
 
 float4 samplePNGTuber(float2 local_uv, float2 box_size) {
-    // 1. Background
     float4 bg = float4(0.0, 0.0, 0.0, 0.0);
     if (bg_mode == 0) {
         bg = bg_color;
@@ -105,33 +104,25 @@ float4 samplePNGTuber(float2 local_uv, float2 box_size) {
         bg = float4(0.0, 0.0, 0.0, 0.0);
     }
 
-    // 2. Avatar with aspect-ratio preservation & procedural animations
     float4 av = float4(0.0, 0.0, 0.0, 0.0);
     if (has_avatar == 1 && avatar_tex_size.x > 1.0 && avatar_tex_size.y > 1.0) {
-        // Coordinates centered at bottom-center of box for natural breathing/sway
         float2 p = local_uv - avatar_offset;
-
-        // Apply talk bounce (shift avatar UP -> sample lower Y)
         p.y += anim_bounce;
 
-        // Pivot at bottom center (0, 0.5)
         float2 pivot = float2(0.0, 0.5);
         float2 q = p - pivot;
 
-        // Sway (rotation around bottom pivot)
         float c = cos(-anim_sway);
         float s = sin(-anim_sway);
         q = float2(q.x * c - q.y * s, q.x * s + q.y * c);
 
-        // Breathing (stretch vertically from bottom pivot)
         float breath_y = 1.0 + anim_breath;
-        float breath_x = 1.0 - anim_breath * 0.35; // subtle squash-and-stretch
+        float breath_x = 1.0 - anim_breath * 0.35;
         q.x /= max(breath_x, 0.1);
         q.y /= max(breath_y, 0.1);
 
         p = q + pivot;
 
-        // Preserve aspect ratio of avatar inside box_size
         float box_aspect = box_size.x / max(box_size.y, 1.0);
         float tex_aspect = avatar_tex_size.x / max(avatar_tex_size.y, 1.0);
 
@@ -148,7 +139,6 @@ float4 samplePNGTuber(float2 local_uv, float2 box_size) {
         }
     }
 
-    // Composite Avatar over Background (straight alpha -> premultiplied -> straight)
     float out_a = av.a + bg.a * (1.0 - av.a);
     float3 out_rgb = float3(0.0, 0.0, 0.0);
     if (out_a > 0.0001) {
@@ -172,7 +162,6 @@ float4 PSCamMorph(VertData v_in) : TARGET {
     float dist = sdRoundedBox(p, half_box, r);
     float aa = 1.0;
 
-    // 1. Drop Shadow
     float4 result = float4(0.0, 0.0, 0.0, 0.0);
     if (shadow_color.a > 0.001) {
         float2 p_shadow = p - shadow_offset;
@@ -183,7 +172,6 @@ float4 PSCamMorph(VertData v_in) : TARGET {
         result = float4(shadow_color.rgb * shadow_alpha, shadow_alpha);
     }
 
-    // 2. Outer Glow
     if (glow_size > 0.5 && glow_intensity > 0.001 && glow_color.a > 0.001) {
         float glow_dist = max(dist - border_width, 0.0);
         float glow_factor = exp(-glow_dist / max(glow_size * 0.35, 1.0));
@@ -194,7 +182,6 @@ float4 PSCamMorph(VertData v_in) : TARGET {
         result = float4(g_rgb + result.rgb * (1.0 - g_alpha), g_alpha + result.a * (1.0 - g_alpha));
     }
 
-    // 3. Main Content (Webcam <-> PNGTuber crossfade)
     float mask = 1.0 - smoothstep(-aa, aa, dist);
     if (mask > 0.001) {
         float2 local_uv = p / box_size;
@@ -215,7 +202,6 @@ float4 PSCamMorph(VertData v_in) : TARGET {
         result = float4(c_rgb + result.rgb * (1.0 - c_a), c_a + result.a * (1.0 - c_a));
     }
 
-    // 4. Border
     if (border_width > 0.1 && border_color.a > 0.001) {
         float half_bw = border_width * 0.5;
         float border_dist = abs(dist) - half_bw;
