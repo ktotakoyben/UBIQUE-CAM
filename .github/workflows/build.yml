@@ -20,7 +20,7 @@ jobs:
           repository: obsproject/obs-plugintemplate
           path: template
 
-      - name: Inject CamMorph code into template
+      - name: Inject CamMorph code & enable Qt6 UI
         shell: pwsh
         run: |
           Remove-Item -Path "template/src/*" -Recurse -Force
@@ -37,9 +37,17 @@ jobs:
           $spec = Get-Content $specPath -Raw | ConvertFrom-Json
           $spec.name = "obs-cam-morph"
           $spec.displayName = "OBS CamMorph"
-          $spec.version = "0.1.0"
+          $spec.version = "0.3.0"
           $spec.author = "Ben"
           $spec | ConvertTo-Json -Depth 10 | Set-Content $specPath -Encoding UTF8
+
+          # Enable Qt6 + Frontend API and add src/cam-morph-ui.cpp in CMakeLists.txt
+          $cmakePath = "template/CMakeLists.txt"
+          $cmake = Get-Content $cmakePath -Raw
+          $cmake = $cmake -replace 'option\(ENABLE_FRONTEND_API[^)]+OFF\)', 'option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)'
+          $cmake = $cmake -replace 'option\(ENABLE_QT[^)]+OFF\)', 'option(ENABLE_QT "Use Qt functionality" ON)'
+          $cmake = $cmake -replace 'src/plugin-main\.c', "src/plugin-main.c`n  src/cam-morph-ui.cpp`n  src/cam-morph-common.h"
+          Set-Content $cmakePath $cmake -Encoding UTF8
 
       - name: Configure CMake (Windows x64)
         working-directory: template
