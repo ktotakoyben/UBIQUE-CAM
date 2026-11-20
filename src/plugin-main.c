@@ -1,8 +1,7 @@
 #include <obs-module.h>
-#include <graphics/image-file.h>
+#include <graphics/graphics.h>
 #include <graphics/vec2.h>
 #include <graphics/vec4.h>
-#include <util/dstr.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +19,13 @@ enum png_bg_mode {
     BG_IMAGE = 1,
     BG_BLUR_CAM = 2,
     BG_TRANSPARENT = 3
+};
+
+struct tex_slot {
+    char *path;
+    gs_texture_t *tex;
+    uint32_t width;
+    uint32_t height;
 };
 
 struct cam_morph_data {
@@ -97,18 +103,12 @@ struct cam_morph_data {
     bool is_talking;
     bool was_talking;
 
-    // PNGTuber Images
-    char *path_idle;
-    char *path_talk;
-    char *path_blink;
-    char *path_talk_blink;
-    char *path_bg;
-
-    gs_image_file_t img_idle;
-    gs_image_file_t img_talk;
-    gs_image_file_t img_blink;
-    gs_image_file_t img_talk_blink;
-    gs_image_file_t img_bg;
+    // PNGTuber Images (using standard gs_texture_create_from_file for OBS 30-33+ compatibility)
+    struct tex_slot img_idle;
+    struct tex_slot img_talk;
+    struct tex_slot img_blink;
+    struct tex_slot img_talk_blink;
+    struct tex_slot img_bg;
 
     // Blink & Animations
     float blink_interval;
@@ -197,25 +197,40 @@ static void attach_audio_source(struct cam_morph_data *filter, const char *name)
     }
 }
 
-static void reload_image_if_changed(char **stored_path, gs_image_file_t *img, const char *new_path)
+static void free_tex_slot(struct tex_slot *slot)
 {
-    const char *cur = *stored_path ? *stored_path : "";
+    if (slot->tex) {
+        obs_enter_graphics();
+        gs_texture_destroy(slot->tex);
+        obs_leave_graphics();
+        slot->tex = NULL;
+    }
+    bfree(slot->path);
+    slot->path = NULL;
+    slot->width = 0;
+    slot->height = 0;
+}
+
+static void reload_tex_slot(struct tex_slot *slot, const char *new_path)
+{
+    const char *cur = slot->path ? slot->path : "";
     const char *nxt = new_path ? new_path : "";
     if (strcmp(cur, nxt) == 0) {
         return;
     }
 
-    obs_enter_graphics();
-    gs_image_file_free(img);
-    obs_leave_graphics();
+    free_tex_slot(slot);
 
-    bfree(*stored_path);
-    *stored_path = (nxt[0] != '\0') ? bstrdup(nxt) : NULL;
-
-    if (*stored_path) {
-        gs_image_file_init(img, *stored_path);
+    if (nxt[0] != '\0') {
+        slot->path = bstrdup(nxt);
         obs_enter_graphics();
-        gs_image_file_init_texture(img);
+        slot->tex = gs_texture_create_from_file(slot->path);
+        if (slot->tex) {
+            slot->width = gs_texture_get_width(slot->tex);
+            slot->height = gs_texture_get_height(slot->tex);
+        } else {
+            blog(LOG_WARNING, "[obs-cam-morph] Failed to load image: %s", slot->path);
+        }
         obs_leave_graphics();
     }
 }
@@ -276,11 +291,11 @@ static void cam_morph_update(void *data, obs_data_t *settings)
     filter->audio_threshold_db = (float)obs_data_get_double(settings, "audio_threshold");
     filter->talk_hold_sec = (float)obs_data_get_double(settings, "talk_hold_ms") / 1000.0f;
 
-    reload_image_if_changed(&filter->path_idle, &filter->img_idle, obs_data_get_string(settings, "img_idle"));
-    reload_image_if_changed(&filter->path_talk, &filter->img_talk, obs_data_get_string(settings, "img_talk"));
-    reload_image_if_changed(&filter->path_blink, &filter->img_blink, obs_data_get_string(settings, "img_blink"));
-    reload_image_if_changed(&filter->path_talk_blink, &filter->img_talk_blink, obs_data_get_string(settings, "img_talk_blink"));
-    reload_image_if_changed(&filter->path_bg, &filter->img_bg, obs_data_get_string(settings, "bg_image_file"));
+    reload_tex_slot(&filter->img_idle, obs_data_get_string(settings, "img_idle"));
+    reload_tex_slot(&filter->img_talk, obs_data_get_string(settings, "img_talk"));
+    reload_tex_slot(&filter->img_blink, obs_data_get_string(settings, "img_blink"));
+    reload_tex_slot(&filter->img_talk_blink, obs_data_get_string(settings, "img_talk_blink"));
+    reload_tex_slot(&filter->img_bg, obs_data_get_string(settings, "bg_image_file"));
 
     filter->blink_interval = (float)obs_data_get_double(settings, "blink_interval");
     filter->blink_duration = (float)obs_data_get_double(settings, "blink_duration") / 1000.0f;
@@ -368,18 +383,13 @@ static void cam_morph_destroy(void *data)
     detach_audio_source(filter);
     bfree(filter->audio_source_name);
 
-    bfree(filter->path_idle);
-    bfree(filter->path_talk);
-    bfree(filter->path_blink);
-    bfree(filter->path_talk_blink);
-    bfree(filter->path_bg);
+    free_tex_slot(&filter->img_idle);
+    free_tex_slot(&filter->img_talk);
+    free_tex_slot(&filter->img_blink);
+    free_tex_slot(&filter->img_talk_blink);
+    free_tex_slot(&filter->img_bg);
 
     obs_enter_graphics();
-    gs_image_file_free(&filter->img_idle);
-    gs_image_file_free(&filter->img_talk);
-    gs_image_file_free(&filter->img_blink);
-    gs_image_file_free(&filter->img_talk_blink);
-    gs_image_file_free(&filter->img_bg);
     if (filter->dummy_tex) gs_texture_destroy(filter->dummy_tex);
     if (filter->effect) gs_effect_destroy(filter->effect);
     obs_leave_graphics();
@@ -427,7 +437,7 @@ static void cam_morph_video_tick(void *data, float seconds)
     filter->was_talking = filter->is_talking;
 
     if (filter->bounce_active) {
-        filter->bounce_phase += seconds * 6.5f; // ~0.15s hop
+        filter->bounce_phase += seconds * 6.5f;
         if (filter->bounce_phase >= 1.0f) {
             filter->bounce_phase = 0.0f;
             filter->bounce_active = false;
@@ -442,19 +452,9 @@ static void cam_morph_video_tick(void *data, float seconds)
             filter->blink_timer = fmaxf(filter->blink_duration, 0.04f);
         } else {
             filter->is_blinking = false;
-            float rnd = (float)rand() / (float)RAND_MAX; // 0..1
+            float rnd = (float)rand() / (float)RAND_MAX;
             float base = fmaxf(filter->blink_interval, 0.5f);
             filter->blink_timer = base * (0.65f + rnd * 0.7f);
-        }
-    }
-
-    // 4. Tick animated GIFs if loaded
-    uint64_t ns = (uint64_t)(seconds * 1000000000.0f);
-    if (filter->img_bg.loaded) {
-        if (gs_image_file_tick(&filter->img_bg, ns)) {
-            obs_enter_graphics();
-            gs_image_file_update_texture(&filter->img_bg);
-            obs_leave_graphics();
         }
     }
 }
@@ -511,17 +511,17 @@ static uint32_t cam_morph_get_height(void *data)
     return filter->out_height;
 }
 
-static gs_image_file_t *pick_active_avatar(struct cam_morph_data *filter)
+static struct tex_slot *pick_active_avatar(struct cam_morph_data *filter)
 {
     if (filter->is_talking && filter->is_blinking) {
-        if (filter->img_talk_blink.loaded && filter->img_talk_blink.texture) return &filter->img_talk_blink;
-        if (filter->img_talk.loaded && filter->img_talk.texture) return &filter->img_talk;
+        if (filter->img_talk_blink.tex) return &filter->img_talk_blink;
+        if (filter->img_talk.tex) return &filter->img_talk;
     } else if (filter->is_talking) {
-        if (filter->img_talk.loaded && filter->img_talk.texture) return &filter->img_talk;
+        if (filter->img_talk.tex) return &filter->img_talk;
     } else if (filter->is_blinking) {
-        if (filter->img_blink.loaded && filter->img_blink.texture) return &filter->img_blink;
+        if (filter->img_blink.tex) return &filter->img_blink;
     }
-    if (filter->img_idle.loaded && filter->img_idle.texture) return &filter->img_idle;
+    if (filter->img_idle.tex) return &filter->img_idle;
     return NULL;
 }
 
@@ -546,19 +546,17 @@ static void cam_morph_video_render(void *data, gs_effect_t *effect)
         return;
     }
 
-    gs_image_file_t *av = pick_active_avatar(filter);
-    gs_texture_t *av_tex = (av && av->texture) ? av->texture : filter->dummy_tex;
+    struct tex_slot *av = pick_active_avatar(filter);
+    gs_texture_t *av_tex = (av && av->tex) ? av->tex : filter->dummy_tex;
     struct vec2 av_tex_size = {
-        av ? (float)av->cx : 1.0f,
-        av ? (float)av->cy : 1.0f
+        av ? (float)av->width : 1.0f,
+        av ? (float)av->height : 1.0f
     };
-    gs_texture_t *bg_tex = (filter->img_bg.loaded && filter->img_bg.texture)
-                               ? filter->img_bg.texture
-                               : filter->dummy_tex;
+    gs_texture_t *bg_tex = filter->img_bg.tex ? filter->img_bg.tex : filter->dummy_tex;
 
     // Procedural animation values
     float breath = sinf(filter->time_acc * 2.2f) * filter->anim_breath_amp;
-    float sway = sinf(filter->time_acc * 1.4f) * filter->anim_sway_amp * 0.0174533f; // deg to rad
+    float sway = sinf(filter->time_acc * 1.4f) * filter->anim_sway_amp * 0.0174533f;
     float bounce = filter->bounce_active
                        ? (sinf(filter->bounce_phase * 3.1415926f) * filter->anim_bounce_amp)
                        : 0.0f;
@@ -715,7 +713,7 @@ static obs_properties_t *cam_morph_get_properties(void *data)
     obs_properties_add_float_slider(png, "audio_threshold", obs_module_text("AudioThreshold"), -80.0, 0.0, 0.5);
     obs_properties_add_float_slider(png, "talk_hold_ms", obs_module_text("TalkHoldMs"), 0.0, 600.0, 10.0);
 
-    const char *img_filter = "Images (*.png *.jpg *.jpeg *.webp *.gif);;All Files (*.*)";
+    const char *img_filter = "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All Files (*.*)";
     obs_properties_add_path(png, "img_idle", obs_module_text("ImgIdle"), OBS_PATH_FILE, img_filter, NULL);
     obs_properties_add_path(png, "img_talk", obs_module_text("ImgTalk"), OBS_PATH_FILE, img_filter, NULL);
     obs_properties_add_path(png, "img_blink", obs_module_text("ImgBlink"), OBS_PATH_FILE, img_filter, NULL);
@@ -771,7 +769,7 @@ struct obs_source_info cam_morph_filter_info = {
 bool obs_module_load(void)
 {
     obs_register_source(&cam_morph_filter_info);
-    blog(LOG_INFO, "[obs-cam-morph] Plugin loaded successfully (v0.2.0)");
+    blog(LOG_INFO, "[obs-cam-morph] Plugin loaded successfully (v0.2.1)");
     return true;
 }
 
