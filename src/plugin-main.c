@@ -1,4 +1,4 @@
-#include <obs-module.h>
+#include "cam-morph-common.h"
 #include <graphics/graphics.h>
 #include <graphics/vec2.h>
 #include <graphics/vec4.h>
@@ -8,18 +8,6 @@
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-cam-morph", "ru-RU")
-
-enum morph_mode {
-    MODE_WEBCAM = 0,
-    MODE_PNGTUBER = 1
-};
-
-enum png_bg_mode {
-    BG_COLOR = 0,
-    BG_IMAGE = 1,
-    BG_BLUR_CAM = 2,
-    BG_TRANSPARENT = 3
-};
 
 struct tex_slot {
     char *path;
@@ -103,7 +91,7 @@ struct cam_morph_data {
     bool is_talking;
     bool was_talking;
 
-    // PNGTuber Images (using standard gs_texture_create_from_file for OBS 30-33+ compatibility)
+    // PNGTuber Images
     struct tex_slot img_idle;
     struct tex_slot img_talk;
     struct tex_slot img_blink;
@@ -139,6 +127,21 @@ struct cam_morph_data {
     float pad_left;
     float pad_top;
 };
+
+obs_source_t *cam_morph_get_source(struct cam_morph_data *filter)
+{
+    return filter ? filter->context : NULL;
+}
+
+float cam_morph_get_current_db(struct cam_morph_data *filter)
+{
+    return filter ? filter->current_db : -100.0f;
+}
+
+bool cam_morph_is_talking(struct cam_morph_data *filter)
+{
+    return filter ? filter->is_talking : false;
+}
 
 static const char *cam_morph_get_name(void *unused)
 {
@@ -258,7 +261,6 @@ static void cam_morph_update(void *data, obs_data_t *settings)
     filter->mode = (int)obs_data_get_int(settings, "mode");
     filter->transition_speed = (float)obs_data_get_double(settings, "transition_speed");
 
-    // Geometry
     filter->corner_radius = (float)obs_data_get_double(settings, "corner_radius");
     filter->zoom = (float)obs_data_get_double(settings, "zoom");
     filter->pan_x = (float)obs_data_get_double(settings, "pan_x");
@@ -271,14 +273,12 @@ static void cam_morph_update(void *data, obs_data_t *settings)
     if (filter->crop_left + filter->crop_right > 0.95f) filter->crop_right = 0.95f - filter->crop_left;
     if (filter->crop_top + filter->crop_bottom > 0.95f) filter->crop_bottom = 0.95f - filter->crop_top;
 
-    // Border & Glow
     filter->border_width = (float)obs_data_get_double(settings, "border_width");
     vec4_from_rgba(&filter->border_color, (uint32_t)obs_data_get_int(settings, "border_color"));
     filter->glow_size = (float)obs_data_get_double(settings, "glow_size");
     filter->glow_intensity = (float)obs_data_get_double(settings, "glow_intensity");
     vec4_from_rgba(&filter->glow_color, (uint32_t)obs_data_get_int(settings, "glow_color"));
 
-    // Shadow
     filter->shadow_enable = obs_data_get_bool(settings, "shadow_enable");
     filter->shadow_blur = (float)obs_data_get_double(settings, "shadow_blur");
     filter->shadow_offset_x = (float)obs_data_get_double(settings, "shadow_offset_x");
@@ -286,7 +286,6 @@ static void cam_morph_update(void *data, obs_data_t *settings)
     vec4_from_rgba(&filter->shadow_color, (uint32_t)obs_data_get_int(settings, "shadow_color"));
     if (!filter->shadow_enable) filter->shadow_color.w = 0.0f;
 
-    // PNGTuber Audio & Images
     attach_audio_source(filter, obs_data_get_string(settings, "audio_source"));
     filter->audio_threshold_db = (float)obs_data_get_double(settings, "audio_threshold");
     filter->talk_hold_sec = (float)obs_data_get_double(settings, "talk_hold_ms") / 1000.0f;
@@ -303,12 +302,10 @@ static void cam_morph_update(void *data, obs_data_t *settings)
     filter->avatar_offset_x = (float)obs_data_get_double(settings, "avatar_offset_x");
     filter->avatar_offset_y = (float)obs_data_get_double(settings, "avatar_offset_y");
 
-    // Animations
     filter->anim_breath_amp = (float)obs_data_get_double(settings, "anim_breath");
     filter->anim_bounce_amp = (float)obs_data_get_double(settings, "anim_bounce");
     filter->anim_sway_amp = (float)obs_data_get_double(settings, "anim_sway");
 
-    // Background
     filter->bg_mode = (int)obs_data_get_int(settings, "bg_mode");
     vec4_from_rgba(&filter->bg_color, (uint32_t)obs_data_get_int(settings, "bg_color"));
     filter->bg_blur = (float)obs_data_get_double(settings, "bg_blur") / 1000.0f;
@@ -358,8 +355,6 @@ static void *cam_morph_create(obs_data_t *settings, obs_source_t *context)
         filter->param_bg_mode         = gs_effect_get_param_by_name(filter->effect, "bg_mode");
         filter->param_bg_color        = gs_effect_get_param_by_name(filter->effect, "bg_color");
         filter->param_bg_blur         = gs_effect_get_param_by_name(filter->effect, "bg_blur");
-    } else {
-        blog(LOG_ERROR, "[obs-cam-morph] Failed to load effect: %s", effect_path ? effect_path : "NULL");
     }
     obs_leave_graphics();
     bfree(effect_path);
@@ -376,6 +371,7 @@ static void *cam_morph_create(obs_data_t *settings, obs_source_t *context)
 static void cam_morph_destroy(void *data)
 {
     struct cam_morph_data *filter = data;
+    cam_morph_ui_close_for_filter(filter);
 
     if (filter->hotkey_toggle != OBS_INVALID_HOTKEY_ID) {
         obs_hotkey_unregister(filter->hotkey_toggle);
@@ -402,7 +398,6 @@ static void cam_morph_video_tick(void *data, float seconds)
     struct cam_morph_data *filter = data;
     filter->time_acc += seconds;
 
-    // 1. Smooth mode transition
     float target_t = (filter->mode == MODE_PNGTUBER) ? 1.0f : 0.0f;
     if (filter->transition_speed <= 0.01f) {
         filter->morph_t = target_t;
@@ -415,7 +410,6 @@ static void cam_morph_video_tick(void *data, float seconds)
         }
     }
 
-    // 2. Audio talking state with hold timer
     float db = filter->current_db;
     if (db >= filter->audio_threshold_db) {
         filter->is_talking = true;
@@ -429,7 +423,6 @@ static void cam_morph_video_tick(void *data, float seconds)
         filter->is_talking = false;
     }
 
-    // Trigger bounce on speech onset
     if (filter->is_talking && !filter->was_talking) {
         filter->bounce_active = true;
         filter->bounce_phase = 0.0f;
@@ -444,7 +437,6 @@ static void cam_morph_video_tick(void *data, float seconds)
         }
     }
 
-    // 3. Auto-blink timer
     filter->blink_timer -= seconds;
     if (filter->blink_timer <= 0.0f) {
         if (!filter->is_blinking) {
@@ -554,7 +546,6 @@ static void cam_morph_video_render(void *data, gs_effect_t *effect)
     };
     gs_texture_t *bg_tex = filter->img_bg.tex ? filter->img_bg.tex : filter->dummy_tex;
 
-    // Procedural animation values
     float breath = sinf(filter->time_acc * 2.2f) * filter->anim_breath_amp;
     float sway = sinf(filter->time_acc * 1.4f) * filter->anim_sway_amp * 0.0174533f;
     float bounce = filter->bounce_active
@@ -650,6 +641,35 @@ static void cam_morph_get_defaults(obs_data_t *settings)
     obs_data_set_default_double(settings, "bg_blur", 18.0);
 }
 
+static bool open_retro_ui_cb(obs_properties_t *props, obs_property_t *property, void *data)
+{
+    UNUSED_PARAMETER(props);
+    UNUSED_PARAMETER(property);
+    struct cam_morph_data *filter = data;
+    cam_morph_ui_open(filter);
+    return false;
+}
+
+static bool mode_modified_cb(obs_properties_t *props, obs_property_t *p, obs_data_t *settings)
+{
+    UNUSED_PARAMETER(p);
+    bool is_png = (obs_data_get_int(settings, "mode") == MODE_PNGTUBER);
+    obs_property_set_visible(obs_properties_get(props, "group_png"), is_png);
+    obs_property_set_visible(obs_properties_get(props, "group_anim"), is_png);
+    obs_property_set_visible(obs_properties_get(props, "group_bg"), is_png);
+    return true;
+}
+
+static bool bg_mode_modified_cb(obs_properties_t *props, obs_property_t *p, obs_data_t *settings)
+{
+    UNUSED_PARAMETER(p);
+    int bg = (int)obs_data_get_int(settings, "bg_mode");
+    obs_property_set_visible(obs_properties_get(props, "bg_color"), bg == BG_COLOR);
+    obs_property_set_visible(obs_properties_get(props, "bg_image_file"), bg == BG_IMAGE);
+    obs_property_set_visible(obs_properties_get(props, "bg_blur"), bg == BG_BLUR_CAM);
+    return true;
+}
+
 static bool enum_audio_sources_cb(void *param, obs_source_t *src)
 {
     obs_property_t *list = param;
@@ -663,14 +683,19 @@ static bool enum_audio_sources_cb(void *param, obs_source_t *src)
 
 static obs_properties_t *cam_morph_get_properties(void *data)
 {
-    UNUSED_PARAMETER(data);
     obs_properties_t *props = obs_properties_create();
 
-    // Top-level Mode
+    // Big button to open the Classic Macintosh Retro Panel
+    obs_properties_add_button2(props, "open_retro_ui", obs_module_text("OpenRetroPanel"),
+                               open_retro_ui_cb, data);
+
+    // Smart native mode selector
     obs_property_t *mode_list = obs_properties_add_list(
         props, "mode", obs_module_text("Mode"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
     obs_property_list_add_int(mode_list, obs_module_text("ModeWebcam"), MODE_WEBCAM);
     obs_property_list_add_int(mode_list, obs_module_text("ModePNGTuber"), MODE_PNGTUBER);
+    obs_property_set_modified_callback(mode_list, mode_modified_cb);
+
     obs_properties_add_float_slider(props, "transition_speed", obs_module_text("TransitionSpeed"), 0.0, 2.0, 0.05);
 
     // Group 1: Geometry
@@ -741,6 +766,7 @@ static obs_properties_t *cam_morph_get_properties(void *data)
     obs_property_list_add_int(bg_list, obs_module_text("BgImage"), BG_IMAGE);
     obs_property_list_add_int(bg_list, obs_module_text("BgBlurCam"), BG_BLUR_CAM);
     obs_property_list_add_int(bg_list, obs_module_text("BgTransparent"), BG_TRANSPARENT);
+    obs_property_set_modified_callback(bg_list, bg_mode_modified_cb);
 
     obs_properties_add_color_alpha(bg, "bg_color", obs_module_text("BgColorPick"));
     obs_properties_add_path(bg, "bg_image_file", obs_module_text("BgImageFile"), OBS_PATH_FILE, img_filter, NULL);
@@ -769,7 +795,7 @@ struct obs_source_info cam_morph_filter_info = {
 bool obs_module_load(void)
 {
     obs_register_source(&cam_morph_filter_info);
-    blog(LOG_INFO, "[obs-cam-morph] Plugin loaded successfully (v0.2.1)");
+    blog(LOG_INFO, "[obs-cam-morph] Plugin loaded successfully (v0.3.0 Macintosh Platinum UI)");
     return true;
 }
 
