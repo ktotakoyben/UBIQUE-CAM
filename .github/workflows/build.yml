@@ -52,7 +52,7 @@ jobs:
       - name: Configure CMake (Windows x64)
         working-directory: template
         shell: pwsh
-        run: cmake --preset windows-x64
+        run: cmake --preset windows-x64 -DENABLE_FRONTEND_API=ON -DENABLE_QT=ON
 
       - name: Build Plugin (Release)
         working-directory: template
