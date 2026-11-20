@@ -35,13 +35,13 @@ jobs:
           $spec = Get-Content $specPath -Raw | ConvertFrom-Json
           $spec.name = "ubique-cam"
           $spec.displayName = "UBIQUE CAM"
-          $spec.version = "0.5.0"
+          $spec.version = "0.6.0"
           $spec.author = "Ben"
           $spec | ConvertTo-Json -Depth 10 | Set-Content $specPath -Encoding UTF8
 
           $cmakePath = "template/CMakeLists.txt"
           $cmake = Get-Content $cmakePath -Raw
-          $cmake = $cmake -replace 'src/plugin-main\.c', "src/plugin-main.c`n  src/ubique-ui.cpp`n  src/ubique-common.h"
+          $cmake = $cmake -replace 'src/plugin-main\.c', "src/plugin-main.c`n  src/ubique-ui.cpp`n  src/ubique-dshow.cpp`n  src/ubique-dshow.h`n  src/ubique-common.h"
           Set-Content $cmakePath $cmake -Encoding UTF8
 
       - name: Configure CMake (Windows x64 + Qt6)
