@@ -1,0 +1,149 @@
+uniform float4x4 ViewProj;
+uniform texture2D image;
+
+uniform float2 out_size;
+uniform float2 src_size;
+uniform float2 pad_offset;
+
+uniform float4 crop;        // left, top, right, bottom (in 0..0.49 UV fraction)
+uniform float zoom;         // >= 1.0
+uniform float2 pan;         // -1.0 .. 1.0
+
+uniform float corner_radius; // pixels
+
+uniform float border_width;  // pixels
+uniform float4 border_color;
+
+uniform float glow_size;     // pixels
+uniform float glow_intensity;
+uniform float4 glow_color;
+
+uniform float shadow_blur;   // pixels
+uniform float2 shadow_offset; // pixels
+uniform float4 shadow_color;
+
+sampler_state textureSampler {
+    Filter    = Linear;
+    AddressU  = Clamp;
+    AddressV  = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in) {
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+// Signed Distance Function for a rounded box centered at origin
+// p: point relative to box center (in pixels)
+// b: half-size of the box (in pixels)
+// r: corner radius (in pixels)
+float sdRoundedBox(float2 p, float2 b, float r) {
+    float2 q = abs(p) - b + r;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+float4 PSCamMorph(VertData v_in) : TARGET {
+    // Current pixel position in output canvas
+    float2 px = v_in.uv * out_size;
+
+    // Cropped visible box dimensions in pixels
+    float2 crop_min = crop.xy * src_size;
+    float2 crop_max = (1.0 - crop.zw) * src_size;
+    float2 box_size = max(crop_max - crop_min, float2(2.0, 2.0));
+    float2 half_box = box_size * 0.5;
+
+    // Center of the visible box in output canvas
+    float2 box_center = pad_offset + half_box;
+
+    // Point relative to box center
+    float2 p = px - box_center;
+
+    // Clamp corner radius so it never exceeds half of the smallest side
+    float max_r = min(half_box.x, half_box.y);
+    float r = clamp(corner_radius, 0.0, max_r);
+
+    // Distance to main rounded box
+    float dist = sdRoundedBox(p, half_box, r);
+
+    // Anti-aliasing width
+    float aa = 1.0;
+
+    // 1. Drop Shadow
+    float4 result = float4(0.0, 0.0, 0.0, 0.0);
+    if (shadow_color.a > 0.001) {
+        float2 p_shadow = p - shadow_offset;
+        float dist_shadow = sdRoundedBox(p_shadow, half_box, r);
+        float blur = max(shadow_blur, 1.0);
+        float shadow_alpha = 1.0 - smoothstep(-blur * 0.5, blur, dist_shadow);
+        shadow_alpha *= shadow_color.a;
+        result = float4(shadow_color.rgb * shadow_alpha, shadow_alpha);
+    }
+
+    // 2. Outer Glow
+    if (glow_size > 0.5 && glow_intensity > 0.001 && glow_color.a > 0.001) {
+        float glow_dist = max(dist - border_width, 0.0);
+        float glow_factor = exp(-glow_dist / max(glow_size * 0.35, 1.0));
+        glow_factor *= smoothstep(glow_size, 0.0, glow_dist);
+        float g_alpha = clamp(glow_factor * glow_intensity * glow_color.a, 0.0, 1.0);
+
+        // Alpha-blend glow over shadow
+        float3 g_rgb = glow_color.rgb * g_alpha;
+        result = float4(g_rgb + result.rgb * (1.0 - g_alpha), g_alpha + result.a * (1.0 - g_alpha));
+    }
+
+    // 3. Webcam Image (with Crop, Zoom, Pan)
+    float mask = 1.0 - smoothstep(-aa, aa, dist);
+    if (mask > 0.001) {
+        // Normalized coords inside the visible box: [-0.5 .. 0.5]
+        float2 local_uv = p / box_size;
+
+        // Apply zoom and pan
+        float inv_zoom = 1.0 / max(zoom, 1.0);
+        float2 zoomed_uv = local_uv * inv_zoom + 0.5;
+
+        // Pan shifts within the available zoomed margin
+        float2 max_pan = (1.0 - inv_zoom) * 0.5;
+        zoomed_uv += pan * max_pan;
+
+        // Map back into cropped region of original source UV
+        float2 src_uv = lerp(crop.xy, 1.0 - crop.zw, clamp(zoomed_uv, 0.0, 1.0));
+        float4 cam_col = image.Sample(textureSampler, src_uv);
+
+        float cam_a = cam_col.a * mask;
+        float3 cam_rgb = cam_col.rgb * cam_a;
+        result = float4(cam_rgb + result.rgb * (1.0 - cam_a), cam_a + result.a * (1.0 - cam_a));
+    }
+
+    // 4. Border (drawn on the outer edge of the rounded box)
+    if (border_width > 0.1 && border_color.a > 0.001) {
+        // Border spans from dist = -border_width*0.5 to +border_width*0.5
+        float half_bw = border_width * 0.5;
+        float border_dist = abs(dist) - half_bw;
+        float border_mask = 1.0 - smoothstep(-aa, aa, border_dist);
+        float b_alpha = border_mask * border_color.a;
+
+        float3 b_rgb = border_color.rgb * b_alpha;
+        result = float4(b_rgb + result.rgb * (1.0 - b_alpha), b_alpha + result.a * (1.0 - b_alpha));
+    }
+
+    // Convert premultiplied result back to straight alpha for OBS compositor
+    if (result.a > 0.0001) {
+        result.rgb /= result.a;
+    }
+
+    return result;
+}
+
+technique Draw {
+    pass {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = PSCamMorph(v_in);
+    }
+}
