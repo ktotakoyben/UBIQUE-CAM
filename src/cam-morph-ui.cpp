@@ -1,6 +1,7 @@
 #include "cam-morph-common.h"
 #include <obs-frontend-api.h>
 
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QCheckBox>
 #include <QColorDialog>
@@ -18,6 +19,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPalette>
 #include <QPixmap>
 #include <QPushButton>
 #include <QSlider>
@@ -30,165 +32,273 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <vector>
 
-// Classic Macintosh OS 8/9 Platinum QSS Theme
-static const char *MAC_PLATINUM_QSS = R"(
+// Neo-Macintosh QSS (Poolsuite + Teenage Engineering + Classic Mac OS 8/9)
+static const char *NEO_MAC_QSS = R"(
 QDialog {
-    background-color: #DDDDDD;
-    color: #000000;
-    font-family: "Geneva", "Tahoma", "MS Sans Serif", sans-serif;
-    font-size: 11px;
+    background-color: #EFECE4;
+    color: #161616;
+    font-family: "Cascadia Mono", "Consolas", "Segoe UI", monospace;
+    font-size: 12px;
 }
 QLabel {
-    color: #000000;
+    color: #161616;
     background: transparent;
+    font-family: "Segoe UI", "Tahoma", sans-serif;
+    font-size: 12px;
+}
+QLabel[mono="true"] {
+    font-family: "Cascadia Mono", "Consolas", "Lucida Console", monospace;
+    font-size: 11px;
+    font-weight: bold;
+    color: #161616;
+    background-color: #E3DFD3;
+    border: 1px solid #161616;
+    padding: 2px 5px;
 }
 QTabWidget::pane {
-    border-top: 2px solid #FFFFFF;
-    border-left: 2px solid #FFFFFF;
-    border-right: 2px solid #666666;
-    border-bottom: 2px solid #666666;
-    background-color: #DDDDDD;
-    padding: 6px;
+    border: 2px solid #161616;
+    background-color: #FAF8F2;
+    padding: 10px;
+    margin-top: -2px;
 }
 QTabBar::tab {
-    background-color: #CCCCCC;
-    color: #000000;
-    border-top: 2px solid #FFFFFF;
-    border-left: 2px solid #FFFFFF;
-    border-right: 2px solid #666666;
-    border-bottom: 1px solid #888888;
-    padding: 5px 14px;
-    margin-right: 2px;
+    background-color: #DFDBD0;
+    color: #3A3832;
+    border: 2px solid #161616;
+    border-bottom: none;
+    padding: 6px 16px;
+    margin-right: 4px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 11px;
     font-weight: bold;
+    text-transform: uppercase;
+}
+QTabBar::tab:hover {
+    background-color: #EAE6DC;
+    color: #161616;
 }
 QTabBar::tab:selected {
-    background-color: #DDDDDD;
-    border-bottom: 2px solid #DDDDDD;
-    margin-bottom: -1px;
+    background-color: #FAF8F2;
+    color: #161616;
+    padding-bottom: 8px;
 }
 QPushButton {
-    background-color: #DDDDDD;
-    color: #000000;
-    border-top: 2px solid #FFFFFF;
-    border-left: 2px solid #FFFFFF;
-    border-right: 2px solid #555555;
-    border-bottom: 2px solid #555555;
-    padding: 4px 10px;
+    background-color: #FAF8F2;
+    color: #161616;
+    border: 2px solid #161616;
+    border-radius: 2px;
+    padding: 5px 12px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 11px;
     font-weight: bold;
-    min-height: 18px;
+    min-height: 20px;
 }
 QPushButton:hover {
-    background-color: #E6E6E6;
+    background-color: #E8E4D8;
 }
-QPushButton:pressed, QPushButton:checked {
-    background-color: #BBBBBB;
-    border-top: 2px solid #555555;
-    border-left: 2px solid #555555;
-    border-right: 2px solid #FFFFFF;
-    border-bottom: 2px solid #FFFFFF;
+QPushButton:pressed {
+    background-color: #161616;
+    color: #FAF8F2;
+}
+QPushButton[modeBtn="true"] {
+    background-color: #E5E1D5;
+    color: #4A4842;
+    border: 2px solid #161616;
+    font-size: 12px;
+    letter-spacing: 1px;
+    padding: 6px 14px;
+}
+QPushButton[modeBtn="true"]:hover {
+    background-color: #FAF8F2;
+    color: #161616;
+}
+QPushButton[modeBtn="true"]:checked {
+    background-color: #161616;
+    color: #FAF8F2;
+    border: 2px solid #161616;
+}
+QPushButton[presetBtn="true"] {
+    background-color: #EFECE4;
+    border: 1.5px solid #161616;
+    padding: 4px 10px;
+    font-size: 11px;
+}
+QPushButton[presetBtn="true"]:hover {
+    background-color: #161616;
+    color: #FAF8F2;
 }
 QGroupBox {
-    border: 1px solid #888888;
-    border-top: 1px solid #888888;
-    margin-top: 10px;
-    padding-top: 8px;
+    background-color: #F4F1E8;
+    border: 1.5px solid #161616;
+    margin-top: 12px;
+    padding: 12px 10px 10px 10px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 11px;
     font-weight: bold;
-    color: #000000;
+    color: #161616;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 8px;
-    padding: 0 4px;
-    background-color: #DDDDDD;
+    left: 10px;
+    padding: 1px 6px;
+    background-color: #161616;
+    color: #FAF8F2;
 }
 QComboBox {
+    background-color: #FAF8F2;
+    color: #161616;
+    border: 2px solid #161616;
+    border-radius: 2px;
+    padding: 4px 28px 4px 8px;
+    font-family: "Segoe UI", "Tahoma", sans-serif;
+    font-size: 12px;
+    font-weight: bold;
+    min-height: 22px;
+}
+QComboBox:hover {
     background-color: #FFFFFF;
-    color: #000000;
-    border-top: 2px solid #666666;
-    border-left: 2px solid #666666;
-    border-right: 2px solid #FFFFFF;
-    border-bottom: 2px solid #FFFFFF;
-    padding: 2px 6px;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 24px;
+    border-left: 2px solid #161616;
+    background-color: #E3DFD3;
+}
+QComboBox::down-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #161616;
 }
 QComboBox QAbstractItemView {
-    background-color: #FFFFFF;
-    color: #000000;
-    selection-background-color: #333399;
-    selection-color: #FFFFFF;
+    background-color: #FAF8F2;
+    color: #161616;
+    border: 2px solid #161616;
+    selection-background-color: #161616;
+    selection-color: #FAF8F2;
+    outline: none;
+    padding: 2px;
+}
+QComboBox QAbstractItemView::item {
+    background-color: #FAF8F2;
+    color: #161616;
+    padding: 6px 10px;
+    min-height: 22px;
+}
+QComboBox QAbstractItemView::item:hover,
+QComboBox QAbstractItemView::item:selected {
+    background-color: #161616;
+    color: #FAF8F2;
 }
 QSlider::groove:horizontal {
     height: 6px;
-    background: #AAAAAA;
-    border-top: 1px solid #555555;
-    border-left: 1px solid #555555;
-    border-bottom: 1px solid #FFFFFF;
-    border-right: 1px solid #FFFFFF;
+    background: #DCD8CC;
+    border: 1.5px solid #161616;
+}
+QSlider::sub-page:horizontal {
+    background: #161616;
+    border: 1.5px solid #161616;
 }
 QSlider::handle:horizontal {
-    background: #DDDDDD;
-    border-top: 2px solid #FFFFFF;
-    border-left: 2px solid #FFFFFF;
-    border-right: 2px solid #444444;
-    border-bottom: 2px solid #444444;
+    background: #FAF8F2;
+    border: 2px solid #161616;
     width: 12px;
-    margin: -5px 0;
+    height: 16px;
+    margin: -6px 0;
+}
+QSlider::handle:horizontal:hover {
+    background: #E84A27;
+    border: 2px solid #161616;
 }
 QCheckBox {
-    color: #000000;
-    spacing: 6px;
+    color: #161616;
+    font-family: "Segoe UI", "Tahoma", sans-serif;
+    font-size: 12px;
+    font-weight: bold;
+    spacing: 8px;
 }
 QCheckBox::indicator {
-    width: 13px;
-    height: 13px;
-    background-color: #FFFFFF;
-    border-top: 2px solid #555555;
-    border-left: 2px solid #555555;
-    border-right: 2px solid #FFFFFF;
-    border-bottom: 2px solid #FFFFFF;
+    width: 15px;
+    height: 15px;
+    background-color: #FAF8F2;
+    border: 2px solid #161616;
 }
 QCheckBox::indicator:checked {
-    background-color: #333399;
+    background-color: #E84A27;
+    border: 2px solid #161616;
 }
 )";
 
-// Classic Macintosh Pinstripe Header Bar
-class MacPinstripeHeader : public QWidget {
+// Bulletproof helper to override OBS global dark QPalette on QComboBox popups
+static void styleRetroCombo(QComboBox *combo)
+{
+    QPalette pal = combo->palette();
+    pal.setColor(QPalette::Window, QColor("#FAF8F2"));
+    pal.setColor(QPalette::Base, QColor("#FAF8F2"));
+    pal.setColor(QPalette::AlternateBase, QColor("#EFECE4"));
+    pal.setColor(QPalette::Text, QColor("#161616"));
+    pal.setColor(QPalette::WindowText, QColor("#161616"));
+    pal.setColor(QPalette::ButtonText, QColor("#161616"));
+    pal.setColor(QPalette::Highlight, QColor("#161616"));
+    pal.setColor(QPalette::HighlightedText, QColor("#FAF8F2"));
+    combo->setPalette(pal);
+
+    if (auto *v = combo->view()) {
+        v->setPalette(pal);
+        v->setStyleSheet(
+            "QAbstractItemView { background-color: #FAF8F2; color: #161616; border: 2px solid #161616; outline: none; font-family: 'Segoe UI', sans-serif; font-size: 12px; }"
+            "QAbstractItemView::item { background-color: #FAF8F2; color: #161616; padding: 6px 10px; min-height: 22px; }"
+            "QAbstractItemView::item:selected { background-color: #161616; color: #FAF8F2; }"
+            "QAbstractItemView::item:hover { background-color: #2541B2; color: #FAF8F2; }");
+    }
+}
+
+// Neo-Macintosh Pinstripe Header (Poolsuite / System 7 modernized)
+class NeoMacHeader : public QWidget {
 public:
-    explicit MacPinstripeHeader(const QString &title, QWidget *parent = nullptr)
+    explicit NeoMacHeader(const QString &title, QWidget *parent = nullptr)
         : QWidget(parent), m_title(title)
     {
-        setFixedHeight(26);
+        setFixedHeight(30);
     }
 
 protected:
     void paintEvent(QPaintEvent *) override
     {
         QPainter p(this);
-        p.fillRect(rect(), QColor("#DDDDDD"));
+        p.fillRect(rect(), QColor("#EFECE4"));
 
-        // Classic horizontal pinstripes
-        for (int y = 4; y < height() - 4; y += 3) {
-            p.setPen(QColor("#888888"));
-            p.drawLine(8, y, width() - 8, y);
-            p.setPen(QColor("#FFFFFF"));
-            p.drawLine(8, y + 1, width() - 8, y + 1);
+        // Crisp Neo-Mac horizontal pinstripes
+        for (int y = 6; y <= height() - 7; y += 3) {
+            p.setPen(QColor("#161616"));
+            p.drawLine(32, y, width() - 10, y);
         }
 
-        // Centered title box interrupting pinstripes
-        QFont f = font();
-        f.setBold(true);
+        // Classic Mac left square box detail
+        QRect boxRect(8, 7, 15, 15);
+        p.fillRect(boxRect, QColor("#FAF8F2"));
+        p.setPen(QPen(QColor("#161616"), 1.5));
+        p.drawRect(boxRect);
+        p.fillRect(QRect(12, 11, 7, 7), QColor("#E84A27"));
+
+        // Centered bold monospace title badge
+        QFont f("Cascadia Mono", 10, QFont::Bold);
+        f.setStyleHint(QFont::Monospace);
         p.setFont(f);
         QFontMetrics fm(f);
-        int tw = fm.horizontalAdvance(m_title) + 18;
-        QRect titleRect((width() - tw) / 2, 2, tw, height() - 4);
-        p.fillRect(titleRect, QColor("#DDDDDD"));
-        p.setPen(QColor("#000000"));
+        int tw = fm.horizontalAdvance(m_title) + 24;
+        QRect titleRect((width() - tw) / 2, 3, tw, height() - 6);
+        p.fillRect(titleRect, QColor("#EFECE4"));
+        p.setPen(QColor("#161616"));
         p.drawText(titleRect, Qt::AlignCenter, m_title);
 
-        // Bottom separator
-        p.setPen(QColor("#666666"));
+        // Bottom crisp ink line
+        p.setPen(QPen(QColor("#161616"), 2));
         p.drawLine(0, height() - 1, width(), height() - 1);
     }
 
@@ -196,12 +306,12 @@ private:
     QString m_title;
 };
 
-// Retro Segmented LED VU-Meter for Microphone
+// Teenage Engineering / Retro Hardware Segmented VU-Meter
 class RetroVuMeter : public QWidget {
 public:
     explicit RetroVuMeter(QWidget *parent = nullptr) : QWidget(parent)
     {
-        setFixedHeight(22);
+        setFixedHeight(26);
     }
 
     void setValues(float db, float thresholdDb, bool talking)
@@ -216,19 +326,14 @@ protected:
     void paintEvent(QPaintEvent *) override
     {
         QPainter p(this);
-        // Sunken Mac bezel
-        p.fillRect(rect(), QColor("#181A18"));
-        p.setPen(QColor("#555555"));
-        p.drawLine(0, 0, width() - 1, 0);
-        p.drawLine(0, 0, 0, height() - 1);
-        p.setPen(QColor("#FFFFFF"));
-        p.drawLine(0, height() - 1, width() - 1, height() - 1);
-        p.drawLine(width() - 1, 0, width() - 1, height() - 1);
+        p.fillRect(rect(), QColor("#141514"));
+        p.setPen(QPen(QColor("#161616"), 2));
+        p.drawRect(rect().adjusted(1, 1, -1, -1));
 
-        int pad = 4;
+        int pad = 5;
         int innerW = width() - pad * 2;
         int innerH = height() - pad * 2;
-        int segments = 28;
+        int segments = 32;
         float segW = (float)innerW / (float)segments;
 
         float normDb = (m_db + 80.0f) / 80.0f;
@@ -237,25 +342,25 @@ protected:
         int activeSegs = (int)(normDb * segments);
 
         for (int i = 0; i < segments; i++) {
-            QRectF r(pad + i * segW + 1, pad, segW - 2, innerH);
+            QRectF r(pad + i * segW + 1, pad, segW - 2.2, innerH);
             bool lit = (i < activeSegs);
             QColor col;
-            if (i < 18) {
-                col = lit ? QColor("#33DD55") : QColor("#1E3322");
-            } else if (i < 24) {
-                col = lit ? QColor("#FFCC22") : QColor("#3A3318");
+            if (i < 20) {
+                col = lit ? QColor("#39D353") : QColor("#1F2A21");
+            } else if (i < 27) {
+                col = lit ? QColor("#F2C94C") : QColor("#2D291C");
             } else {
-                col = lit ? QColor("#EE3333") : QColor("#3A1A1A");
+                col = lit ? QColor("#E84A27") : QColor("#301D1A");
             }
             p.fillRect(r, col);
         }
 
-        // Threshold marker line
+        // Threshold marker needle
         float normT = (m_thresh + 80.0f) / 80.0f;
         if (normT < 0.0f) normT = 0.0f;
         if (normT > 1.0f) normT = 1.0f;
         int tx = pad + (int)(normT * innerW);
-        p.setPen(QPen(m_talking ? QColor("#FFFFFF") : QColor("#FF6666"), 2));
+        p.setPen(QPen(m_talking ? QColor("#FFFFFF") : QColor("#E84A27"), 2));
         p.drawLine(tx, 2, tx, height() - 3);
     }
 
@@ -265,31 +370,35 @@ private:
     bool m_talking = false;
 };
 
-// Drag & Drop PNG Avatar Tile
+// Modernized Retro Drag & Drop Avatar Tile
 class AvatarDropSlot : public QFrame {
 public:
     AvatarDropSlot(const QString &labelText, std::function<void(const QString &)> onChanged, QWidget *parent = nullptr)
         : QFrame(parent), m_onChanged(std::move(onChanged))
     {
         setAcceptDrops(true);
-        setFixedSize(118, 128);
+        setFixedSize(124, 138);
+        setCursor(Qt::PointingHandCursor);
         setStyleSheet(
-            "QFrame { background-color: #CCCCCC; "
-            "border-top: 2px solid #666666; border-left: 2px solid #666666; "
-            "border-right: 2px solid #FFFFFF; border-bottom: 2px solid #FFFFFF; }");
+            "QFrame { background-color: #FAF8F2; border: 2px solid #161616; border-radius: 2px; }"
+            "QFrame:hover { background-color: #EFECE4; }");
 
         auto *lay = new QVBoxLayout(this);
-        lay->setContentsMargins(4, 4, 4, 4);
-        lay->setSpacing(2);
+        lay->setContentsMargins(5, 5, 5, 5);
+        lay->setSpacing(4);
 
-        m_preview = new QLabel("Перетащи PNG\nили кликни", this);
+        m_preview = new QLabel("PNG\nПеретащи\nили кликни", this);
         m_preview->setAlignment(Qt::AlignCenter);
-        m_preview->setStyleSheet("border: none; color: #444444; font-size: 10px;");
-        m_preview->setFixedSize(106, 94);
+        m_preview->setStyleSheet(
+            "QLabel { border: 1.5px dashed #8C887E; background-color: #F4F1E8; "
+            "color: #55524B; font-family: 'Cascadia Mono', Consolas, monospace; font-size: 10px; }");
+        m_preview->setFixedSize(110, 98);
 
         m_caption = new QLabel(labelText, this);
         m_caption->setAlignment(Qt::AlignCenter);
-        m_caption->setStyleSheet("border: none; font-weight: bold; font-size: 10px;");
+        m_caption->setStyleSheet(
+            "QLabel { border: none; background-color: #161616; color: #FAF8F2; "
+            "font-family: 'Cascadia Mono', Consolas, monospace; font-weight: bold; font-size: 10px; padding: 2px; }");
 
         lay->addWidget(m_preview);
         lay->addWidget(m_caption);
@@ -301,12 +410,12 @@ public:
         if (!path.isEmpty()) {
             QPixmap pix(path);
             if (!pix.isNull()) {
-                m_preview->setPixmap(pix.scaled(102, 90, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                m_preview->setPixmap(pix.scaled(104, 92, Qt::KeepAspectRatio, Qt::SmoothTransformation));
                 return;
             }
         }
         m_preview->setPixmap(QPixmap());
-        m_preview->setText("Перетащи PNG\nили кликни");
+        m_preview->setText("PNG\nПеретащи\nили кликни");
     }
 
 protected:
@@ -372,25 +481,28 @@ public:
     CamMorphRetroDialog(struct cam_morph_data *filter, QWidget *parent)
         : QDialog(parent), m_filter(filter)
     {
-        setWindowTitle("CamMorph 0.3 — Macintosh Platinum");
-        setStyleSheet(MAC_PLATINUM_QSS);
-        setMinimumWidth(520);
+        setWindowTitle("CamMorph — Панель настройки");
+        setStyleSheet(NEO_MAC_QSS);
+        setMinimumWidth(560);
 
         auto *root = new QVBoxLayout(this);
-        root->setContentsMargins(8, 6, 8, 8);
-        root->setSpacing(6);
+        root->setContentsMargins(12, 8, 12, 12);
+        root->setSpacing(10);
 
-        // Pinstripe Mac Header
-        root->addWidget(new MacPinstripeHeader("CamMorph v0.3 — Панель управления", this));
+        // Neo-Macintosh Header
+        root->addWidget(new NeoMacHeader("CAMMORPH // ПАНЕЛЬ НАСТРОЙКИ", this));
 
-        // Top Mode Bar (Big Retro Toggle + LED)
+        // Top Mode Bar (Tactile Hardware Switches)
         auto *modeBar = new QHBoxLayout();
+        modeBar->setSpacing(8);
         m_btnWebcam = new QPushButton("●  ВЕБКАМЕРА (LIVE)", this);
         m_btnPng = new QPushButton("○  PNGTUBER (МОДЕЛЬКА)", this);
+        m_btnWebcam->setProperty("modeBtn", true);
+        m_btnPng->setProperty("modeBtn", true);
         m_btnWebcam->setCheckable(true);
         m_btnPng->setCheckable(true);
-        m_btnWebcam->setFixedHeight(30);
-        m_btnPng->setFixedHeight(30);
+        m_btnWebcam->setFixedHeight(36);
+        m_btnPng->setFixedHeight(36);
 
         modeBar->addWidget(m_btnWebcam);
         modeBar->addWidget(m_btnPng);
@@ -406,9 +518,9 @@ public:
 
         // Bottom Bar
         auto *bottom = new QHBoxLayout();
-        auto *hint = new QLabel("ПКМ по плитке PNG — очистить слот. Хоткей: Настройки → Горячие клавиши.", this);
-        hint->setStyleSheet("color: #444444; font-size: 10px;");
-        auto *btnClose = new QPushButton("Закрыть", this);
+        auto *hint = new QLabel("ПКМ по плитке PNG — очистить слот  •  Хоткей: Настройки → Горячие клавиши", this);
+        hint->setStyleSheet("color: #55524B; font-size: 11px;");
+        auto *btnClose = new QPushButton("ЗАКРЫТЬ", this);
         connect(btnClose, &QPushButton::clicked, this, &QDialog::close);
         bottom->addWidget(hint);
         bottom->addStretch();
@@ -456,7 +568,6 @@ private:
     QPushButton *m_btnPng = nullptr;
     RetroVuMeter *m_vuMeter = nullptr;
 
-    // Controls for sync
     std::vector<std::function<void(obs_data_t *)>> m_loaders;
 
     void applyDouble(const char *key, double val)
@@ -526,8 +637,9 @@ private:
         auto *sl = new QSlider(Qt::Horizontal, this);
         sl->setRange((int)std::round(minV * scale), (int)std::round(maxV * scale));
         auto *valLbl = new QLabel(this);
-        valLbl->setFixedWidth(56);
-        valLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        valLbl->setProperty("mono", true);
+        valLbl->setFixedWidth(68);
+        valLbl->setAlignment(Qt::AlignCenter);
 
         grid->addWidget(lbl, row, 0);
         grid->addWidget(sl, row, 1);
@@ -556,10 +668,15 @@ private:
         grid->addWidget(btn, row, 1, 1, 2);
 
         auto updateBtnStyle = [btn](const QColor &c) {
-            btn->setText(QString("RGBA(%1, %2, %3, %4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alpha()));
-            btn->setStyleSheet(QString("background-color: rgba(%1,%2,%3,255); color: %4;")
+            btn->setText(QString("#%1%2%3  (A:%4)")
+                             .arg(c.red(), 2, 16, QChar('0'))
+                             .arg(c.green(), 2, 16, QChar('0'))
+                             .arg(c.blue(), 2, 16, QChar('0'))
+                             .arg(c.alpha())
+                             .toUpper());
+            btn->setStyleSheet(QString("background-color: rgba(%1,%2,%3,255); color: %4; border: 2px solid #161616;")
                                    .arg(c.red()).arg(c.green()).arg(c.blue())
-                                   .arg((c.lightness() < 128) ? "#FFFFFF" : "#000000"));
+                                   .arg((c.lightness() < 128) ? "#FAF8F2" : "#161616"));
         };
 
         connect(btn, &QPushButton::clicked, this, [this, key, updateBtnStyle]() {
@@ -587,13 +704,19 @@ private:
     {
         auto *w = new QWidget(this);
         auto *lay = new QVBoxLayout(w);
+        lay->setSpacing(10);
 
         // Quick Presets
         auto *presetBox = new QHBoxLayout();
-        auto *bCircle = new QPushButton("Круг", this);
-        auto *bSquare = new QPushButton("Квадрат 1:1", this);
-        auto *bWide = new QPushButton("Кино 16:9", this);
-        auto *bReset = new QPushButton("Сброс", this);
+        presetBox->setSpacing(6);
+        auto *bCircle = new QPushButton("КРУГ", this);
+        auto *bSquare = new QPushButton("КВАДРАТ 1:1", this);
+        auto *bWide = new QPushButton("КИНО 16:9", this);
+        auto *bReset = new QPushButton("СБРОС", this);
+        bCircle->setProperty("presetBtn", true);
+        bSquare->setProperty("presetBtn", true);
+        bWide->setProperty("presetBtn", true);
+        bReset->setProperty("presetBtn", true);
         presetBox->addWidget(bCircle);
         presetBox->addWidget(bSquare);
         presetBox->addWidget(bWide);
@@ -627,11 +750,12 @@ private:
         });
 
         auto *grid = new QGridLayout();
+        grid->setVerticalSpacing(8);
         int r = 0;
         addSliderRow(grid, r++, "Скругление углов", "corner_radius", 0, 500, 1, " px");
         addSliderRow(grid, r++, "Зум", "zoom", 1.0, 4.0, 100, "x");
-        addSliderRow(grid, r++, "Сдвиг X", "pan_x", -1.0, 1.0, 100, "");
-        addSliderRow(grid, r++, "Сдвиг Y", "pan_y", -1.0, 1.0, 100, "");
+        addSliderRow(grid, r++, "Сдвиг по X", "pan_x", -1.0, 1.0, 100, "");
+        addSliderRow(grid, r++, "Сдвиг по Y", "pan_y", -1.0, 1.0, 100, "");
         addSliderRow(grid, r++, "Кроп слева", "crop_left", 0, 45, 2, "%");
         addSliderRow(grid, r++, "Кроп справа", "crop_right", 0, 45, 2, "%");
         addSliderRow(grid, r++, "Кроп сверху", "crop_top", 0, 45, 2, "%");
@@ -646,9 +770,11 @@ private:
     {
         auto *w = new QWidget(this);
         auto *lay = new QVBoxLayout(w);
+        lay->setSpacing(10);
 
-        auto *gBorder = new QGroupBox("Рамка и свечение", this);
+        auto *gBorder = new QGroupBox("РАМКА И СВЕЧЕНИЕ", this);
         auto *bGrid = new QGridLayout(gBorder);
+        bGrid->setVerticalSpacing(8);
         int r = 0;
         addSliderRow(bGrid, r++, "Толщина рамки", "border_width", 0, 40, 2, " px");
         addColorRow(bGrid, r++, "Цвет рамки", "border_color");
@@ -657,8 +783,9 @@ private:
         addColorRow(bGrid, r++, "Цвет свечения", "glow_color");
         lay->addWidget(gBorder);
 
-        auto *gShadow = new QGroupBox("Тень (Drop Shadow)", this);
+        auto *gShadow = new QGroupBox("ТЕНЬ (DROP SHADOW)", this);
         auto *sGrid = new QGridLayout(gShadow);
+        sGrid->setVerticalSpacing(8);
         auto *chkShadow = new QCheckBox("Включить тень", this);
         sGrid->addWidget(chkShadow, 0, 0, 1, 3);
         connect(chkShadow, &QCheckBox::toggled, this, [this](bool v) { applyBool("shadow_enable", v); });
@@ -692,13 +819,15 @@ private:
     {
         auto *w = new QWidget(this);
         auto *lay = new QVBoxLayout(w);
+        lay->setSpacing(10);
 
         // 4 Drag & Drop Avatar Tiles
         auto *tilesRow = new QHBoxLayout();
-        auto *sIdle = new AvatarDropSlot("1. Молчит", [this](const QString &p) { applyString("img_idle", p); }, this);
-        auto *sTalk = new AvatarDropSlot("2. Говорит", [this](const QString &p) { applyString("img_talk", p); }, this);
-        auto *sBlink = new AvatarDropSlot("3. Моргает", [this](const QString &p) { applyString("img_blink", p); }, this);
-        auto *sTB = new AvatarDropSlot("4. Гов+Морг", [this](const QString &p) { applyString("img_talk_blink", p); }, this);
+        tilesRow->setSpacing(8);
+        auto *sIdle = new AvatarDropSlot("01 МОЛЧИТ", [this](const QString &p) { applyString("img_idle", p); }, this);
+        auto *sTalk = new AvatarDropSlot("02 ГОВОРИТ", [this](const QString &p) { applyString("img_talk", p); }, this);
+        auto *sBlink = new AvatarDropSlot("03 МОРГАЕТ", [this](const QString &p) { applyString("img_blink", p); }, this);
+        auto *sTB = new AvatarDropSlot("04 ГОВ+МОРГ", [this](const QString &p) { applyString("img_talk_blink", p); }, this);
         tilesRow->addWidget(sIdle);
         tilesRow->addWidget(sTalk);
         tilesRow->addWidget(sBlink);
@@ -713,12 +842,14 @@ private:
         });
 
         // Mic & VU Meter
-        auto *micBox = new QGroupBox("Микрофон и срабатывание", this);
+        auto *micBox = new QGroupBox("МИКРОФОН И СРАБАТЫВАНИЕ", this);
         auto *mGrid = new QGridLayout(micBox);
+        mGrid->setVerticalSpacing(8);
         mGrid->addWidget(new QLabel("Микрофон:", this), 0, 0);
         auto *micCombo = new QComboBox(this);
         micCombo->addItem("(Не выбран)", "");
         obs_enum_sources(enumAudioCb, micCombo);
+        styleRetroCombo(micCombo);
         mGrid->addWidget(micCombo, 0, 1, 1, 2);
 
         connect(micCombo, &QComboBox::currentIndexChanged, this, [this, micCombo](int idx) {
@@ -740,8 +871,9 @@ private:
         lay->addWidget(micBox);
 
         // Animations & Transform
-        auto *animBox = new QGroupBox("Позиция и анимации", this);
+        auto *animBox = new QGroupBox("ПОЗИЦИЯ И АНИМАЦИИ", this);
         auto *aGrid = new QGridLayout(animBox);
+        aGrid->setVerticalSpacing(8);
         int ar = 0;
         addSliderRow(aGrid, ar++, "Масштаб модельки", "avatar_scale", 0.2, 2.5, 100, "x");
         addSliderRow(aGrid, ar++, "Дыхание", "anim_breath", 0.0, 0.12, 200, "");
@@ -756,6 +888,7 @@ private:
     {
         auto *w = new QWidget(this);
         auto *lay = new QVBoxLayout(w);
+        lay->setSpacing(10);
 
         auto *topRow = new QHBoxLayout();
         topRow->addWidget(new QLabel("Тип фона для PNGTuber:", this));
@@ -764,10 +897,10 @@ private:
         bgCombo->addItem("Картинка", BG_IMAGE);
         bgCombo->addItem("Размытая вебкамера", BG_BLUR_CAM);
         bgCombo->addItem("Прозрачный фон", BG_TRANSPARENT);
+        styleRetroCombo(bgCombo);
         topRow->addWidget(bgCombo);
         lay->addLayout(topRow);
 
-        // Smart dynamic stack based on background type
         auto *stack = new QStackedWidget(this);
 
         // Page 0: Color
@@ -780,7 +913,7 @@ private:
         // Page 1: Image
         auto *pImg = new QWidget(this);
         auto *iLay = new QVBoxLayout(pImg);
-        auto *btnPickBg = new QPushButton("Выбрать файл фона (PNG / JPG)...", this);
+        auto *btnPickBg = new QPushButton("ВЫБРАТЬ ФАЙЛ ФОНА (PNG / JPG)...", this);
         auto *lblBgPath = new QLabel("(Файл не выбран)", this);
         lblBgPath->setWordWrap(true);
         iLay->addWidget(btnPickBg);
