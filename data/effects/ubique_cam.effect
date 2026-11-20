@@ -1,0 +1,222 @@
+uniform float4x4 ViewProj;
+uniform texture2D image;
+uniform texture2D avatar_tex;
+uniform texture2D bg_tex;
+
+uniform float2 out_size;
+uniform float2 src_size;
+uniform float2 pad_offset;
+
+uniform float morph_t;
+
+uniform float4 crop;
+uniform float zoom;
+uniform float2 pan;
+
+uniform float corner_radius;
+uniform float border_width;
+uniform float4 border_color;
+uniform float glow_size;
+uniform float glow_intensity;
+uniform float4 glow_color;
+uniform float shadow_blur;
+uniform float2 shadow_offset;
+uniform float4 shadow_color;
+
+uniform int has_avatar;
+uniform float2 avatar_tex_size;
+uniform float avatar_scale;
+uniform float2 avatar_offset;
+uniform float anim_breath;
+uniform float anim_bounce;
+uniform float anim_sway;
+
+uniform int bg_mode;
+uniform float4 bg_color;
+uniform float bg_blur;
+
+sampler_state textureSampler {
+    Filter    = Linear;
+    AddressU  = Clamp;
+    AddressV  = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in) {
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv  = v_in.uv;
+    return vert_out;
+}
+
+float sdRoundedBox(float2 p, float2 b, float r) {
+    float2 q = abs(p) - b + r;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+float4 sampleWebcam(float2 local_uv) {
+    float inv_zoom = 1.0 / max(zoom, 1.0);
+    float2 zoomed_uv = local_uv * inv_zoom + 0.5;
+    float2 max_pan = (1.0 - inv_zoom) * 0.5;
+    zoomed_uv += pan * max_pan;
+    float2 src_uv = lerp(crop.xy, 1.0 - crop.zw, clamp(zoomed_uv, 0.0, 1.0));
+    return image.Sample(textureSampler, src_uv);
+}
+
+float4 sampleBlurredWebcam(float2 local_uv) {
+    float inv_zoom = 1.0 / max(zoom, 1.0);
+    float2 zoomed_uv = local_uv * inv_zoom + 0.5;
+    float2 max_pan = (1.0 - inv_zoom) * 0.5;
+    zoomed_uv += pan * max_pan;
+    float2 base_uv = lerp(crop.xy, 1.0 - crop.zw, clamp(zoomed_uv, 0.0, 1.0));
+
+    float r = max(bg_blur, 0.001);
+    float4 col = image.Sample(textureSampler, base_uv) * 0.20;
+    col += image.Sample(textureSampler, clamp(base_uv + float2( r,  0.0), 0.0, 1.0)) * 0.12;
+    col += image.Sample(textureSampler, clamp(base_uv + float2(-r,  0.0), 0.0, 1.0)) * 0.12;
+    col += image.Sample(textureSampler, clamp(base_uv + float2(0.0,  r ), 0.0, 1.0)) * 0.12;
+    col += image.Sample(textureSampler, clamp(base_uv + float2(0.0, -r ), 0.0, 1.0)) * 0.12;
+    col += image.Sample(textureSampler, clamp(base_uv + float2( r,  r ) * 0.707, 0.0, 1.0)) * 0.08;
+    col += image.Sample(textureSampler, clamp(base_uv + float2(-r,  r ) * 0.707, 0.0, 1.0)) * 0.08;
+    col += image.Sample(textureSampler, clamp(base_uv + float2( r, -r ) * 0.707, 0.0, 1.0)) * 0.08;
+    col += image.Sample(textureSampler, clamp(base_uv + float2(-r, -r ) * 0.707, 0.0, 1.0)) * 0.08;
+    return col;
+}
+
+float4 samplePNGTuber(float2 local_uv, float2 box_size) {
+    float4 bg = float4(0.0, 0.0, 0.0, 0.0);
+    if (bg_mode == 0) {
+        bg = bg_color;
+    } else if (bg_mode == 1) {
+        bg = bg_tex.Sample(textureSampler, local_uv + 0.5);
+    } else if (bg_mode == 2) {
+        bg = sampleBlurredWebcam(local_uv);
+    } else {
+        bg = float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    float4 av = float4(0.0, 0.0, 0.0, 0.0);
+    if (has_avatar == 1 && avatar_tex_size.x > 1.0 && avatar_tex_size.y > 1.0) {
+        float2 p = local_uv - avatar_offset;
+        p.y += anim_bounce;
+
+        float2 pivot = float2(0.0, 0.5);
+        float2 q = p - pivot;
+
+        float c = cos(-anim_sway);
+        float s = sin(-anim_sway);
+        q = float2(q.x * c - q.y * s, q.x * s + q.y * c);
+
+        float breath_y = 1.0 + anim_breath;
+        float breath_x = 1.0 - anim_breath * 0.35;
+        q.x /= max(breath_x, 0.1);
+        q.y /= max(breath_y, 0.1);
+
+        p = q + pivot;
+
+        float box_aspect = box_size.x / max(box_size.y, 1.0);
+        float tex_aspect = avatar_tex_size.x / max(avatar_tex_size.y, 1.0);
+
+        float2 av_uv = p / max(avatar_scale, 0.05);
+        if (box_aspect > tex_aspect) {
+            av_uv.x *= (box_aspect / tex_aspect);
+        } else {
+            av_uv.y *= (tex_aspect / box_aspect);
+        }
+        av_uv += 0.5;
+
+        if (av_uv.x >= 0.0 && av_uv.x <= 1.0 && av_uv.y >= 0.0 && av_uv.y <= 1.0) {
+            av = avatar_tex.Sample(textureSampler, av_uv);
+        }
+    }
+
+    float out_a = av.a + bg.a * (1.0 - av.a);
+    float3 out_rgb = float3(0.0, 0.0, 0.0);
+    if (out_a > 0.0001) {
+        out_rgb = (av.rgb * av.a + bg.rgb * bg.a * (1.0 - av.a)) / out_a;
+    }
+    return float4(out_rgb, out_a);
+}
+
+float4 PSUbiqueCam(VertData v_in) : TARGET {
+    float2 px = v_in.uv * out_size;
+
+    float2 crop_min = crop.xy * src_size;
+    float2 crop_max = (1.0 - crop.zw) * src_size;
+    float2 box_size = max(crop_max - crop_min, float2(2.0, 2.0));
+    float2 half_box = box_size * 0.5;
+    float2 box_center = pad_offset + half_box;
+    float2 p = px - box_center;
+
+    float max_r = min(half_box.x, half_box.y);
+    float r = clamp(corner_radius, 0.0, max_r);
+    float dist = sdRoundedBox(p, half_box, r);
+    float aa = 1.0;
+
+    float4 result = float4(0.0, 0.0, 0.0, 0.0);
+    if (shadow_color.a > 0.001) {
+        float2 p_shadow = p - shadow_offset;
+        float dist_shadow = sdRoundedBox(p_shadow, half_box, r);
+        float blur = max(shadow_blur, 1.0);
+        float shadow_alpha = 1.0 - smoothstep(-blur * 0.5, blur, dist_shadow);
+        shadow_alpha *= shadow_color.a;
+        result = float4(shadow_color.rgb * shadow_alpha, shadow_alpha);
+    }
+
+    if (glow_size > 0.5 && glow_intensity > 0.001 && glow_color.a > 0.001) {
+        float glow_dist = max(dist - border_width, 0.0);
+        float glow_factor = exp(-glow_dist / max(glow_size * 0.35, 1.0));
+        glow_factor *= smoothstep(glow_size, 0.0, glow_dist);
+        float g_alpha = clamp(glow_factor * glow_intensity * glow_color.a, 0.0, 1.0);
+
+        float3 g_rgb = glow_color.rgb * g_alpha;
+        result = float4(g_rgb + result.rgb * (1.0 - g_alpha), g_alpha + result.a * (1.0 - g_alpha));
+    }
+
+    float mask = 1.0 - smoothstep(-aa, aa, dist);
+    if (mask > 0.001) {
+        float2 local_uv = p / box_size;
+        float4 content_col;
+
+        if (morph_t <= 0.001) {
+            content_col = sampleWebcam(local_uv);
+        } else if (morph_t >= 0.999) {
+            content_col = samplePNGTuber(local_uv, box_size);
+        } else {
+            float4 cam_c = sampleWebcam(local_uv);
+            float4 png_c = samplePNGTuber(local_uv, box_size);
+            content_col = lerp(cam_c, png_c, morph_t);
+        }
+
+        float c_a = content_col.a * mask;
+        float3 c_rgb = content_col.rgb * c_a;
+        result = float4(c_rgb + result.rgb * (1.0 - c_a), c_a + result.a * (1.0 - c_a));
+    }
+
+    if (border_width > 0.1 && border_color.a > 0.001) {
+        float half_bw = border_width * 0.5;
+        float border_dist = abs(dist) - half_bw;
+        float border_mask = 1.0 - smoothstep(-aa, aa, border_dist);
+        float b_alpha = border_mask * border_color.a;
+
+        float3 b_rgb = border_color.rgb * b_alpha;
+        result = float4(b_rgb + result.rgb * (1.0 - b_alpha), b_alpha + result.a * (1.0 - b_alpha));
+    }
+
+    if (result.a > 0.0001) {
+        result.rgb /= result.a;
+    }
+
+    return result;
+}
+
+technique Draw {
+    pass {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = PSUbiqueCam(v_in);
+    }
+}
