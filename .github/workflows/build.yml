@@ -37,7 +37,7 @@ jobs:
           $spec = Get-Content $specPath -Raw | ConvertFrom-Json
           $spec.name = "ubique-cam"
           $spec.displayName = "UBIQUE CAM"
-          $spec.version = "0.4.0"
+          $spec.version = "0.5.0"
           $spec.author = "Ben"
           $spec | ConvertTo-Json -Depth 10 | Set-Content $specPath -Encoding UTF8
 
