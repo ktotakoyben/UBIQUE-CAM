@@ -1,4 +1,5 @@
 #include "ubique-common.h"
+#include "ubique-dshow.h"
 #include <obs-frontend-api.h>
 
 #include <QAbstractItemView>
@@ -179,6 +180,20 @@ QPushButton[role="preset"]:hover {
     color: #FF9E64;
     border-color: #FF9E64;
     background-color: #1E1C1A;
+}
+QPushButton[role="accent"] {
+    background-color: #25211E;
+    color: #FF9E64;
+    border: 1px solid #FF9E64;
+    border-radius: 5px;
+    padding: 6px 12px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 11px;
+    font-weight: bold;
+}
+QPushButton[role="accent"]:hover {
+    background-color: #FF9E64;
+    color: #111214;
 }
 QComboBox {
     background-color: #141518;
@@ -434,7 +449,6 @@ static uint32_t qColorToObsInt(const QColor &c)
            ((uint32_t)c.red());
 }
 
-// Keys saved into custom user preset slots
 static const char *PRESET_DOUBLE_KEYS[] = {
     "corner_radius", "zoom", "pan_x", "pan_y",
     "crop_left", "crop_right", "crop_top", "crop_bottom",
@@ -456,6 +470,21 @@ static const char *PRESET_BOOL_KEYS[] = {
     "flip_h", "border_audio_react", "shadow_enable"
 };
 
+// Helper to apply hardware camera preset from filter's obs_data_t
+static bool applyHwCameraSlot(struct ubique_cam_data *filter, int slotIndex, QString *errOut = nullptr)
+{
+    if (!filter) return false;
+    obs_source_t *src = ubique_get_source(filter);
+    if (!src) return false;
+    obs_data_t *s = obs_source_get_settings(src);
+    QString camName = QString::fromUtf8(obs_data_get_string(s, "hw_cam_device"));
+    QString key = QString("hw_slot_%1").arg(slotIndex);
+    QString json = QString::fromUtf8(obs_data_get_string(s, key.toUtf8().constData()));
+    obs_data_release(s);
+
+    return UbiqueDShow::applyCameraSettingsJson(camName, json, errOut);
+}
+
 class UbiqueCamDialog : public QDialog {
 public:
     UbiqueCamDialog(struct ubique_cam_data *filter, QWidget *parent)
@@ -463,7 +492,7 @@ public:
     {
         setWindowTitle("UBIQUE CAM — Настройка");
         setStyleSheet(RYOKU_LITHIC_QSS);
-        setMinimumSize(720, 560);
+        setMinimumSize(730, 560);
 
         auto *outer = new QHBoxLayout(this);
         outer->setContentsMargins(0, 0, 0, 0);
@@ -472,7 +501,7 @@ public:
         // 1. Left Navigation Rail (Ryoku Lithic)
         auto *rail = new QFrame(this);
         rail->setProperty("role", "rail");
-        rail->setFixedWidth(174);
+        rail->setFixedWidth(178);
         auto *railLay = new QVBoxLayout(rail);
         railLay->setContentsMargins(0, 16, 0, 14);
         railLay->setSpacing(4);
@@ -481,7 +510,7 @@ public:
         brand->setStyleSheet(
             "font-family: 'Cascadia Mono', Consolas, monospace; font-size: 13px; "
             "font-weight: bold; letter-spacing: 2px; color: #ECE9E2; padding: 0 14px;");
-        auto *subBrand = new QLabel("v0.5  •  MAX EDITION", rail);
+        auto *subBrand = new QLabel("v0.6  •  CAM SAVER", rail);
         subBrand->setStyleSheet(
             "font-family: 'Cascadia Mono', Consolas, monospace; font-size: 9px; "
             "letter-spacing: 1px; color: #FF9E64; padding: 0 14px 10px 14px;");
@@ -501,7 +530,8 @@ public:
             "Рамка и тень",
             "Аудио-спектр",
             "PNGTuber",
-            "Фон и слоты"
+            "Фон и слоты",
+            "Сейв камеры (HW)"
         };
         for (int i = 0; i < navNames.size(); i++) {
             auto *btn = new QPushButton(navNames[i], rail);
@@ -526,7 +556,6 @@ public:
         rightLay->setContentsMargins(18, 14, 18, 14);
         rightLay->setSpacing(10);
 
-        // Top Mode Switcher Bar
         auto *modeBar = new QHBoxLayout();
         modeBar->setSpacing(8);
         m_btnWebcam = new QPushButton("●  КАМЕРА", rightCol);
@@ -539,16 +568,15 @@ public:
         modeBar->addWidget(m_btnPng);
         rightLay->addLayout(modeBar);
 
-        // Stacked Scrollable Pages
         auto *pages = new QStackedWidget(rightCol);
         pages->addWidget(wrapScroll(buildWebcamPage()));
         pages->addWidget(wrapScroll(buildBorderPage()));
         pages->addWidget(wrapScroll(buildSpectrumPage()));
         pages->addWidget(wrapScroll(buildPngPage()));
         pages->addWidget(wrapScroll(buildBgAndSlotsPage()));
+        pages->addWidget(wrapScroll(buildHwCameraSaverPage()));
         rightLay->addWidget(pages, 1);
 
-        // Bottom Bar
         auto *bottom = new QHBoxLayout();
         auto *tip = new QLabel("ПКМ по слоту PNG — очистить  •  Все изменения применяются в реальном времени", rightCol);
         tip->setProperty("role", "muted");
@@ -798,7 +826,7 @@ private:
         return combo;
     }
 
-    // PAGE 1: WEBCAM, SHAPE PRESETS, OPTICS & TRANSITIONS
+    // PAGE 1: WEBCAM
     QWidget *buildWebcamPage()
     {
         auto *w = new QWidget(this);
@@ -806,7 +834,6 @@ private:
         lay->setContentsMargins(0, 0, 6, 0);
         lay->setSpacing(10);
 
-        // Expanded Shape Presets Card (2 rows x 5)
         QVBoxLayout *pLay = nullptr;
         auto *pCard = makeCard(w, &pLay);
         pLay->addWidget(makeSectionLabel("ПРЕСЕТЫ ФОРМЫ", pCard));
@@ -847,7 +874,6 @@ private:
         pLay->addLayout(pGrid);
         lay->addWidget(pCard);
 
-        // Geometry Card
         QVBoxLayout *gLay = nullptr;
         auto *gCard = makeCard(w, &gLay);
         gLay->addWidget(makeSectionLabel("ГЕОМЕТРИЯ И КРОП", gCard));
@@ -865,7 +891,6 @@ private:
         gLay->addLayout(grid);
         lay->addWidget(gCard);
 
-        // Optics & Transition Card
         QVBoxLayout *oLay = nullptr;
         auto *oCard = makeCard(w, &oLay);
         oLay->addWidget(makeSectionLabel("ОПТИКА И ПЕРЕХОД РЕЖИМОВ", oCard));
@@ -890,7 +915,7 @@ private:
         return w;
     }
 
-    // PAGE 2: BORDER, GRADIENT, AUDIO-REACTIVE GLOW & SHADOW
+    // PAGE 2: BORDER & SHADOW
     QWidget *buildBorderPage()
     {
         auto *w = new QWidget(this);
@@ -898,7 +923,6 @@ private:
         lay->setContentsMargins(0, 0, 6, 0);
         lay->setSpacing(10);
 
-        // Visual Style Presets
         QVBoxLayout *stLay = nullptr;
         auto *stCard = makeCard(w, &stLay);
         stLay->addWidget(makeSectionLabel("ПРЕСЕТЫ СТИЛЯ", stCard));
@@ -944,7 +968,6 @@ private:
         stLay->addLayout(stRow);
         lay->addWidget(stCard);
 
-        // Border & Gradient Card
         QVBoxLayout *bLay = nullptr;
         auto *bCard = makeCard(w, &bLay);
         bLay->addWidget(makeSectionLabel("РАМКА И ГРАДИЕНТ", bCard));
@@ -963,7 +986,6 @@ private:
         bLay->addLayout(bGrid);
         lay->addWidget(bCard);
 
-        // Glow & Audio Reactivity Card
         QVBoxLayout *gLay = nullptr;
         auto *gCard = makeCard(w, &gLay);
         gLay->addWidget(makeSectionLabel("СВЕЧЕНИЕ И АУДИО-РЕАКЦИЯ", gCard));
@@ -980,7 +1002,6 @@ private:
         gLay->addLayout(gGrid);
         lay->addWidget(gCard);
 
-        // Shadow Card
         QVBoxLayout *sLay = nullptr;
         auto *sCard = makeCard(w, &sLay);
         sLay->addWidget(makeSectionLabel("ТЕНЬ (DROP SHADOW)", sCard));
@@ -1103,7 +1124,6 @@ private:
             sTB->setImagePath(QString::fromUtf8(obs_data_get_string(s, "img_talk_blink")));
         });
 
-        // Mic Card
         QVBoxLayout *mLay = nullptr;
         auto *mCard = makeCard(w, &mLay);
         mLay->addWidget(makeSectionLabel("МИКРОФОН И СРАБАТЫВАНИЕ", mCard));
@@ -1137,7 +1157,6 @@ private:
         mLay->addLayout(mGrid);
         lay->addWidget(mCard);
 
-        // Position, Animations, Scream Shake & Idle Dim Card
         QVBoxLayout *aLay = nullptr;
         auto *aCard = makeCard(w, &aLay);
         aLay->addWidget(makeSectionLabel("ПОЗИЦИЯ, АНИМАЦИИ И ЭФФЕКТЫ", aCard));
@@ -1160,7 +1179,7 @@ private:
         return w;
     }
 
-    // PAGE 5: BACKGROUND & 3 CUSTOM USER PRESET SLOTS
+    // PAGE 5: BACKGROUND & 3 CUSTOM FILTER PRESET SLOTS
     QWidget *buildBgAndSlotsPage()
     {
         auto *w = new QWidget(this);
@@ -1249,10 +1268,9 @@ private:
             stack->setCurrentIndex(mode >= 0 && mode <= 3 ? mode : 0);
         });
 
-        // Custom User Preset Slots (3 slots persisted in obs_data_t)
         QVBoxLayout *slLay = nullptr;
         auto *slCard = makeCard(w, &slLay);
-        slLay->addWidget(makeSectionLabel("ПОЛЬЗОВАТЕЛЬСКИЕ СЛОТЫ (ПРОФИЛИ)", slCard));
+        slLay->addWidget(makeSectionLabel("ПОЛЬЗОВАТЕЛЬСКИЕ СЛОТЫ ФИЛЬТРА", slCard));
 
         auto *slGrid = new QGridLayout();
         slGrid->setSpacing(8);
@@ -1314,6 +1332,145 @@ private:
         return w;
     }
 
+    // PAGE 6: HARDWARE WEBCAM SETTINGS SAVER (DirectShow: Logitech / Any USB Cam)
+    QWidget *buildHwCameraSaverPage()
+    {
+        auto *w = new QWidget(this);
+        auto *lay = new QVBoxLayout(w);
+        lay->setContentsMargins(0, 0, 6, 0);
+        lay->setSpacing(10);
+
+        QVBoxLayout *cLay = nullptr;
+        auto *card = makeCard(w, &cLay);
+        cLay->addWidget(makeSectionLabel("АППАРАТНЫЕ НАСТРОЙКИ КАМЕРЫ (DIRECTSHOW)", card));
+
+        auto *desc = new QLabel(
+            "Сохраняет экспозицию, фокус, баланс белого, яркость, контраст, резкость и усиление (Gain) "
+            "вместе с флагами Авто/Ручной. Помогает от сброса настроек на камерах Logitech и других USB-вебках.", card);
+        desc->setProperty("role", "muted");
+        desc->setWordWrap(true);
+        cLay->addWidget(desc);
+
+        // Device selector + refresh
+        auto *devRow = new QHBoxLayout();
+        auto *camCombo = new QComboBox(card);
+        styleLithicCombo(camCombo);
+        auto *btnRefresh = new QPushButton("Обновить", card);
+        btnRefresh->setProperty("role", "preset");
+        devRow->addWidget(new QLabel("Камера:", card));
+        devRow->addWidget(camCombo, 1);
+        devRow->addWidget(btnRefresh);
+        cLay->addLayout(devRow);
+
+        auto *statusLbl = new QLabel("Готово к работе", card);
+        statusLbl->setStyleSheet("color: #FF9E64; font-family: 'Cascadia Mono', Consolas, monospace; font-size: 11px;");
+
+        auto populateCams = [camCombo]() {
+            QString prev = camCombo->currentData().toString();
+            camCombo->blockSignals(true);
+            camCombo->clear();
+            QStringList cams = UbiqueDShow::listCameras();
+            if (cams.isEmpty()) {
+                camCombo->addItem("(Камеры не найдены)", "");
+            } else {
+                for (const QString &c : cams) camCombo->addItem(c, c);
+            }
+            int idx = camCombo->findData(prev);
+            if (idx >= 0) camCombo->setCurrentIndex(idx);
+            camCombo->blockSignals(false);
+        };
+        populateCams();
+
+        connect(btnRefresh, &QPushButton::clicked, this, [populateCams, statusLbl]() {
+            populateCams();
+            statusLbl->setText("Список камер обновлён");
+        });
+
+        connect(camCombo, &QComboBox::currentIndexChanged, this, [this, camCombo](int idx) {
+            if (idx >= 0) applyString("hw_cam_device", camCombo->itemData(idx).toString());
+        });
+
+        m_loaders.push_back([this, camCombo, populateCams](obs_data_t *s) {
+            populateCams();
+            QString saved = QString::fromUtf8(obs_data_get_string(s, "hw_cam_device"));
+            int idx = camCombo->findData(saved);
+            if (idx >= 0) {
+                camCombo->blockSignals(true);
+                camCombo->setCurrentIndex(idx);
+                camCombo->blockSignals(false);
+            } else if (camCombo->count() > 0 && !camCombo->itemData(0).toString().isEmpty()) {
+                applyString("hw_cam_device", camCombo->itemData(0).toString());
+            }
+        });
+
+        // 2 Hardware Slots: День / Вечер (Лампа)
+        auto *slotsGrid = new QGridLayout();
+        slotsGrid->setSpacing(8);
+        const QString slotTitles[2] = {"СЛОТ 1: ДЕНЬ", "СЛОТ 2: ВЕЧЕР / ЛАМПА"};
+
+        for (int i = 1; i <= 2; i++) {
+            auto *lbl = new QLabel(slotTitles[i - 1], card);
+            lbl->setStyleSheet("font-family: 'Cascadia Mono', Consolas, monospace; font-weight: bold; font-size: 11px;");
+            auto *btnSave = new QPushButton("СОХРАНИТЬ ТЕКУЩИЕ", card);
+            auto *btnApply = new QPushButton("ПРИМЕНИТЬ", card);
+            btnSave->setProperty("role", "preset");
+            btnApply->setProperty("role", "accent");
+
+            slotsGrid->addWidget(lbl, i - 1, 0);
+            slotsGrid->addWidget(btnSave, i - 1, 1);
+            slotsGrid->addWidget(btnApply, i - 1, 2);
+
+            connect(btnSave, &QPushButton::clicked, this, [this, camCombo, i, statusLbl]() {
+                QString dev = camCombo->currentData().toString();
+                QString err;
+                QString json = UbiqueDShow::captureCameraSettingsJson(dev, &err);
+                if (json.isEmpty()) {
+                    statusLbl->setText("Ошибка: " + err);
+                } else {
+                    QString key = QString("hw_slot_%1").arg(i);
+                    applyString(key.toUtf8().constData(), json);
+                    statusLbl->setText(QString("✓ Настройки камеры сохранены в Слот %1").arg(i));
+                }
+            });
+
+            connect(btnApply, &QPushButton::clicked, this, [this, i, statusLbl]() {
+                QString err;
+                if (applyHwCameraSlot(m_filter, i, &err)) {
+                    statusLbl->setText(QString("✓ Применён аппаратный Слот %1").arg(i));
+                } else {
+                    statusLbl->setText("Ошибка: " + err);
+                }
+            });
+        }
+        cLay->addLayout(slotsGrid);
+        cLay->addWidget(statusLbl);
+        lay->addWidget(card);
+
+        // Auto-apply on OBS startup card
+        QVBoxLayout *autoLay = nullptr;
+        auto *autoCard = makeCard(w, &autoLay);
+        autoLay->addWidget(makeSectionLabel("АВТО-ВОССТАНОВЛЕНИЕ ПРИ ЗАПУСКЕ OBS", autoCard));
+        auto *autoGrid = new QGridLayout();
+        autoGrid->setVerticalSpacing(8);
+        addCheckRow(autoGrid, 0, "Автоматически применять пресет камеры при запуске OBS", "hw_auto_apply");
+        addComboRow(autoGrid, 1, "Слот при запуске", "hw_auto_slot", {
+            {"Слот 1: День", 1},
+            {"Слот 2: Вечер / Лампа", 2}
+        });
+        autoLay->addLayout(autoGrid);
+
+        auto *tip = new QLabel(
+            "Как пользоваться: настрой камеру один раз в OBS (Свойства веб-камеры → Настроить видео), "
+            "затем нажми «СОХРАНИТЬ ТЕКУЩИЕ». Теперь при сбросе достаточно нажать «ПРИМЕНИТЬ» здесь или в док-панели.", autoCard);
+        tip->setProperty("role", "muted");
+        tip->setWordWrap(true);
+        autoLay->addWidget(tip);
+
+        lay->addWidget(autoCard);
+        lay->addStretch();
+        return w;
+    }
+
     void loadFromSettings()
     {
         if (!m_filter) return;
@@ -1362,6 +1519,17 @@ public:
         m_vu = new LithicVuMeter(this);
         lay->addWidget(m_vu);
 
+        // Quick 1-click Hardware Camera Restore buttons
+        auto *hwRow = new QHBoxLayout();
+        hwRow->setSpacing(6);
+        auto *btnHw1 = new QPushButton("↺ День", this);
+        auto *btnHw2 = new QPushButton("↺ Вечер", this);
+        btnHw1->setProperty("role", "preset");
+        btnHw2->setProperty("role", "preset");
+        hwRow->addWidget(btnHw1);
+        hwRow->addWidget(btnHw2);
+        lay->addLayout(hwRow);
+
         auto *btnOpen = new QPushButton("Настройка UBIQUE CAM", this);
         lay->addWidget(btnOpen);
 
@@ -1376,6 +1544,9 @@ public:
             if (!g_filters.empty()) ubique_ui_open(g_filters.front());
         });
 
+        connect(btnHw1, &QPushButton::clicked, this, [this]() { restoreHwAll(1); });
+        connect(btnHw2, &QPushButton::clicked, this, [this]() { restoreHwAll(2); });
+
         auto *timer = new QTimer(this);
         connect(timer, &QTimer::timeout, this, [this]() {
             if (g_filters.empty()) {
@@ -1384,7 +1555,6 @@ public:
                 return;
             }
             auto *f = g_filters.front();
-            m_status->setText(QString("Активных фильтров: %1").arg(g_filters.size()));
             obs_source_t *src = ubique_get_source(f);
             float thresh = -38.0f;
             int mode = MODE_WEBCAM;
@@ -1421,6 +1591,17 @@ private:
             obs_data_release(s);
         }
     }
+
+    void restoreHwAll(int slot)
+    {
+        if (g_filters.empty()) return;
+        QString err;
+        if (applyHwCameraSlot(g_filters.front(), slot, &err)) {
+            m_status->setText(QString("✓ Камера: применён Слот %1").arg(slot));
+        } else {
+            m_status->setText(err);
+        }
+    }
 };
 
 static bool g_dock_registered = false;
@@ -1431,6 +1612,22 @@ extern "C" void ubique_ui_register_filter(struct ubique_cam_data *filter)
     if (std::find(g_filters.begin(), g_filters.end(), filter) == g_filters.end()) {
         g_filters.push_back(filter);
     }
+
+    // Schedule auto-apply of hardware camera settings 2.5s after filter creation (once camera is initialized)
+    QTimer::singleShot(2500, qApp, [filter]() {
+        if (std::find(g_filters.begin(), g_filters.end(), filter) == g_filters.end()) return;
+        obs_source_t *src = ubique_get_source(filter);
+        if (!src) return;
+        obs_data_t *s = obs_source_get_settings(src);
+        bool autoApply = obs_data_get_bool(s, "hw_auto_apply");
+        int slot = (int)obs_data_get_int(s, "hw_auto_slot");
+        obs_data_release(s);
+
+        if (autoApply) {
+            if (slot != 1 && slot != 2) slot = 1;
+            applyHwCameraSlot(filter, slot, nullptr);
+        }
+    });
 }
 
 extern "C" void ubique_ui_unregister_filter(struct ubique_cam_data *filter)
