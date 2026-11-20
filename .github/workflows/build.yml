@@ -1,4 +1,4 @@
-name: Build OBS CamMorph Plugin (Windows x64)
+name: Build UBIQUE CAM Plugin (Windows x64)
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
           repository: obsproject/obs-plugintemplate
           path: template
 
-      - name: Inject CamMorph code & enable Qt6 UI
+      - name: Inject UBIQUE CAM code & enable Qt6 UI
         shell: pwsh
         run: |
           Remove-Item -Path "template/src/*" -Recurse -Force
@@ -35,21 +35,18 @@ jobs:
 
           $specPath = "template/buildspec.json"
           $spec = Get-Content $specPath -Raw | ConvertFrom-Json
-          $spec.name = "obs-cam-morph"
-          $spec.displayName = "OBS CamMorph"
-          $spec.version = "0.3.0"
+          $spec.name = "ubique-cam"
+          $spec.displayName = "UBIQUE CAM"
+          $spec.version = "0.4.0"
           $spec.author = "Ben"
           $spec | ConvertTo-Json -Depth 10 | Set-Content $specPath -Encoding UTF8
 
-          # Enable Qt6 + Frontend API and add src/cam-morph-ui.cpp in CMakeLists.txt
           $cmakePath = "template/CMakeLists.txt"
           $cmake = Get-Content $cmakePath -Raw
-          $cmake = $cmake -replace 'option\(ENABLE_FRONTEND_API[^)]+OFF\)', 'option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)'
-          $cmake = $cmake -replace 'option\(ENABLE_QT[^)]+OFF\)', 'option(ENABLE_QT "Use Qt functionality" ON)'
-          $cmake = $cmake -replace 'src/plugin-main\.c', "src/plugin-main.c`n  src/cam-morph-ui.cpp`n  src/cam-morph-common.h"
+          $cmake = $cmake -replace 'src/plugin-main\.c', "src/plugin-main.c`n  src/ubique-ui.cpp`n  src/ubique-common.h"
           Set-Content $cmakePath $cmake -Encoding UTF8
 
-      - name: Configure CMake (Windows x64)
+      - name: Configure CMake (Windows x64 + Qt6)
         working-directory: template
         shell: pwsh
         run: cmake --preset windows-x64 -DENABLE_FRONTEND_API=ON -DENABLE_QT=ON
@@ -63,17 +60,17 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path "dist/obs-plugins/64bit" -Force
-          New-Item -ItemType Directory -Path "dist/data/obs-plugins/obs-cam-morph" -Force
+          New-Item -ItemType Directory -Path "dist/data/obs-plugins/ubique-cam" -Force
 
-          $dll = Get-ChildItem -Path "template/build_x64" -Filter "obs-cam-morph.dll" -Recurse | Select-Object -First 1
+          $dll = Get-ChildItem -Path "template/build_x64" -Filter "ubique-cam.dll" -Recurse | Select-Object -First 1
           if (-not $dll) {
-            throw "Could not find compiled obs-cam-morph.dll!"
+            throw "Could not find compiled ubique-cam.dll!"
           }
           Copy-Item $dll.FullName -Destination "dist/obs-plugins/64bit/"
-          Copy-Item -Path "plugin-src/data/*" -Destination "dist/data/obs-plugins/obs-cam-morph/" -Recurse -Force
+          Copy-Item -Path "plugin-src/data/*" -Destination "dist/data/obs-plugins/ubique-cam/" -Recurse -Force
 
       - name: Upload Ready-to-Use OBS Plugin Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: obs-cam-morph-windows-x64
+          name: ubique-cam-windows-x64
           path: dist/
